@@ -26,10 +26,12 @@ export default function Documents() {
       d.filename.toLowerCase().includes(search.toLowerCase()) ||
       (d.caseNumber || '').toLowerCase().includes(search.toLowerCase()) ||
       (d.enforcementNumber || '').toLowerCase().includes(search.toLowerCase())
+
     const matchStatus = !statusFilter || d.status === statusFilter
     const matchType = !typeFilter || d.documentType === typeFilter
     const matchFormat = !formatFilter || d.fileFormat === formatFilter
     const matchDate = !dateFilter || d.createdAt.startsWith(dateFilter)
+
     return matchSearch && matchStatus && matchType && matchFormat && matchDate
   })
 
@@ -40,28 +42,45 @@ export default function Documents() {
       title: 'Дата',
       dataIndex: 'createdAt',
       width: 160,
-      sorter: (a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      sorter: (a: any, b: any) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      defaultSortOrder: 'descend' as const,
       render: (v: string) => new Date(v).toLocaleString('ru-RU'),
     },
-    { title: 'Файл', dataIndex: 'filename' },
+    {
+      title: 'Файл',
+      dataIndex: 'filename',
+    },
     {
       title: 'Тип',
       dataIndex: 'documentType',
-      sorter: (a: any, b: any) => a.documentType.localeCompare(b.documentType),
+      sorter: (a: any, b: any) =>
+        a.documentType.localeCompare(b.documentType),
     },
     {
       title: '№ дела / ИП',
       key: 'num',
-      render: (_: any, r: any) => r.caseNumber || r.enforcementNumber || '—',
+      render: (_: any, r: any) =>
+        r.caseNumber || r.enforcementNumber || '—',
     },
-    { title: 'Результат', dataIndex: 'summary', ellipsis: true },
+    {
+      title: 'Результат',
+      dataIndex: 'summary',
+      ellipsis: true,
+    },
     {
       title: 'Статус',
       dataIndex: 'status',
-      sorter: (a: any, b: any) => a.status.localeCompare(b.status),
+      sorter: (a: any, b: any) =>
+        a.status.localeCompare(b.status),
       render: (s: string) => {
         const cfg = statusConfig[s]
-        return <Tag color={cfg.color}>{cfg.label}</Tag>
+
+        return (
+          <Tag color={cfg.color}>
+            {cfg.label}
+          </Tag>
+        )
       },
     },
   ]
@@ -69,6 +88,7 @@ export default function Documents() {
   return (
     <div>
       <h1>Документы</h1>
+
       <Space wrap style={{ marginBottom: 16 }}>
         <Input.Search
           placeholder="Поиск по файлу, делу, ИП"
@@ -77,6 +97,7 @@ export default function Documents() {
           onSearch={setSearch}
           onChange={(e) => !e.target.value && setSearch('')}
         />
+
         <Select
           allowClear
           placeholder="Статус"
@@ -91,13 +112,18 @@ export default function Documents() {
             { value: 'new', label: 'Новый' },
           ]}
         />
+
         <Select
           allowClear
           placeholder="Тип документа"
           style={{ width: 200 }}
           onChange={setTypeFilter}
-          options={types.map((t) => ({ value: t, label: t }))}
+          options={types.map((t) => ({
+            value: t,
+            label: t,
+          }))}
         />
+
         <Select
           allowClear
           placeholder="Формат"
@@ -108,12 +134,20 @@ export default function Documents() {
             { value: 'xml', label: 'XML' },
           ]}
         />
+
         <DatePicker
           placeholder="Дата"
-          onChange={(date) => setDateFilter(date ? dayjs(date).format('YYYY-MM-DD') : undefined)}
+          onChange={(date) =>
+            setDateFilter(
+              date
+                ? dayjs(date).format('YYYY-MM-DD')
+                : undefined
+            )
+          }
           style={{ width: 160 }}
         />
       </Space>
+
       <Table
         rowKey="id"
         columns={columns}

@@ -1,4 +1,14 @@
-import { Card, Statistic, Row, Col, Table, Tag, Alert, Button, message } from 'antd'
+import {
+  Card,
+  Statistic,
+  Row,
+  Col,
+  Table,
+  Tag,
+  Alert,
+  Button,
+  message,
+} from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
@@ -69,11 +79,27 @@ export default function Home() {
     (d) => d.status === 'error'
   )
 
+  const sortedDocuments = [...documents].sort(
+    (a, b) =>
+      new Date(b.createdAt).getTime() -
+      new Date(a.createdAt).getTime()
+  )
+
+  const sortedNeedsReview = [...needsReview].sort(
+    (a, b) =>
+      new Date(b.createdAt).getTime() -
+      new Date(a.createdAt).getTime()
+  )
+
   const columns = [
     {
       title: 'Дата',
       dataIndex: 'createdAt',
       width: 160,
+      sorter: (a: Document, b: Document) =>
+        new Date(a.createdAt).getTime() -
+        new Date(b.createdAt).getTime(),
+      defaultSortOrder: 'descend' as const,
       render: (v: string) =>
         new Date(v).toLocaleString('ru-RU'),
     },
@@ -196,12 +222,12 @@ export default function Home() {
         </Col>
       </Row>
 
-      {needsReview.length > 0 && (
+      {sortedNeedsReview.length > 0 && (
         <Card
           title="Требует вашего внимания"
           style={{ marginBottom: 16 }}
         >
-          {needsReview.map((doc) => (
+          {sortedNeedsReview.map((doc) => (
             <div
               key={doc.id}
               onClick={() =>
@@ -209,12 +235,10 @@ export default function Home() {
               }
               style={{
                 padding: '12px 0',
-                borderBottom:
-                  '1px solid #f0f0f0',
+                borderBottom: '1px solid #f0f0f0',
                 cursor: 'pointer',
                 display: 'flex',
-                justifyContent:
-                  'space-between',
+                justifyContent: 'space-between',
                 alignItems: 'center',
               }}
             >
@@ -272,7 +296,7 @@ export default function Home() {
         <Table
           rowKey="id"
           columns={columns}
-          dataSource={documents}
+          dataSource={sortedDocuments}
           loading={loading}
           pagination={false}
           onRow={(record) => ({
@@ -292,8 +316,6 @@ export default function Home() {
         onClose={() => {
           setUploadOpen(false)
 
-          // После закрытия окна перечитываем
-          // документы из backend.
           setTimeout(() => {
             loadDocuments()
           }, 300)
