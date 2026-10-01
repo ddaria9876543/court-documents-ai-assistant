@@ -12,6 +12,7 @@ from app.schemas.document import (
     DocumentDetailResponse,
     DocumentListResponse,
     DuplicateResponse,
+    StatusUpdate,
     UploadErrorResponse,
     UploadedDocumentResponse,
     UploadResponse,
@@ -28,10 +29,33 @@ from app.services.file_service import (
     validate_file_extension,
 )
 
+
 router = APIRouter(
     prefix="/documents",
     tags=["Documents"]
 )
+
+
+def document_to_response(document: Document) -> dict:
+    file = document.files[0] if document.files else None
+
+    return {
+        "id": document.id,
+        "filename": file.original_filename if file else "",
+        "documentType": document.document_type,
+        "caseNumber": None,
+        "enforcementNumber": None,
+        "status": document.status,
+        "createdAt": document.created_at,
+        "summary": "",
+        "needsReview": False,
+        "reviewReason": None,
+        "files": document.files,
+        "debtor": None,
+        "amount": None,
+        "fileFormat": file.file_format if file else "pdf",
+    }
+
 
 @router.post(
     "/upload",
@@ -70,7 +94,6 @@ async def upload_documents(
                         existing_document_id=duplicate.document_id
                     )
                 )
-
                 continue
 
             storage_filename = generate_storage_filename(
@@ -138,6 +161,7 @@ async def upload_documents(
         errors=errors
     )
 
+
 @router.get(
     "",
     response_model=list[DocumentListResponse]
@@ -153,7 +177,11 @@ def get_documents(
         .order_by(Document.created_at.desc())
     ).all()
 
-    return documents
+    return [
+        document_to_response(document)
+        for document in documents
+    ]
+
 
 @router.get(
     "/{document_id}",
@@ -178,4 +206,53 @@ def get_document(
             detail="Document not found"
         )
 
-    return document
+    response = document_to_response(document)
+    response["history"] = document.history
+
+    return response
+
+
+@router.put(
+    "/{document_id}/status",
+    response_model=DocumentDetailResponse
+)
+def update_document_status(
+    document_id: int,
+    status_data: StatusUpdate,
+    db: Session = Depends(get_db)
+):
+    document = db.scalar(
+        select(Document)
+        .options(
+            selectinload(Document.files),
+            selectinload(Document.history)
+        )
+        .where(Document.id == document_id)
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    old_status = document.status
+    document.status = status_data.status
+
+    history = DocumentHistory(
+        document_id=document.id,
+        event_type="status_changed",
+        message=(
+            f"Status changed from "
+            f"{old_status} to {document.status}"
+        )
+    )
+
+    db.add(history)
+    db.commit()
+    db.refresh(document)
+
+    response = document_to_response(document)
+    response["history"] = document.history
+
+    return response

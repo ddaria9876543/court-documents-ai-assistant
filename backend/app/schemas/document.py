@@ -1,11 +1,22 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
 
+DocumentStatus = Literal[
+    "new",
+    "processing",
+    "processed",
+    "needs_review",
+    "error",
+    "sent",
+]
+
+
 class DocumentFileResponse(BaseModel):
     filename: str
-    file_format: str
+    file_format: Literal["pdf", "xml"]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -20,29 +31,31 @@ class DocumentHistoryResponse(BaseModel):
 
 class DocumentListResponse(BaseModel):
     id: int
-    status: str
-    document_type: str | None
-    created_at: datetime
+    filename: str
+    documentType: str | None = None
+    caseNumber: str | None = None
+    enforcementNumber: str | None = None
+    status: DocumentStatus
+    createdAt: datetime
+    summary: str = ""
+    needsReview: bool = False
+    reviewReason: str | None = None
     files: list[DocumentFileResponse]
+    debtor: str | None = None
+    amount: float | None = None
+    fileFormat: Literal["pdf", "xml"]
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class DocumentDetailResponse(BaseModel):
-    id: int
-    status: str
-    document_type: str | None
-    created_at: datetime
-    files: list[DocumentFileResponse]
+class DocumentDetailResponse(DocumentListResponse):
     history: list[DocumentHistoryResponse]
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class UploadedDocumentResponse(BaseModel):
     document_id: int
     filename: str
-    status: str
+    status: DocumentStatus
 
 
 class DuplicateResponse(BaseModel):
@@ -60,3 +73,7 @@ class UploadResponse(BaseModel):
     uploaded: list[UploadedDocumentResponse]
     duplicates: list[DuplicateResponse]
     errors: list[UploadErrorResponse]
+
+
+class StatusUpdate(BaseModel):
+    status: DocumentStatus
