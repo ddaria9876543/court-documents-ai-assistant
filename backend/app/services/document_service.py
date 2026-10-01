@@ -68,3 +68,76 @@ def create_document(
     db.refresh(document)
 
     return document
+def apply_processing_result(
+    db: Session,
+    document: Document,
+    result: dict,
+) -> Document:
+    """
+    Сохраняет результат document_processing
+    в запись документа.
+    """
+
+    fields = result.get("fields", {})
+
+    case_number_field = fields.get(
+        "case_number",
+        {},
+    )
+
+    document.document_type = result.get(
+        "document_type"
+    )
+
+    document.case_number = case_number_field.get(
+        "value"
+    )
+
+    document.summary = result.get(
+        "summary"
+    )
+
+    document.debtor = result.get(
+        "debtor"
+    )
+
+    document.amount = result.get(
+        "amount"
+    )
+
+    document.status = result.get(
+        "status",
+        "needs_review",
+    )
+
+    document.needs_review = (
+        document.status == "needs_review"
+    )
+
+    warnings = result.get(
+        "warnings",
+        [],
+    )
+
+    document.review_reason = (
+        "; ".join(warnings)
+        if warnings
+        else None
+    )
+
+    document.extracted_data = result
+
+    history = DocumentHistory(
+        document_id=document.id,
+        event_type="document_processed",
+        message=(
+            f"Document processing completed. "
+            f"Status: {document.status}"
+        ),
+    )
+
+    db.add(history)
+    db.commit()
+    db.refresh(document)
+
+    return document

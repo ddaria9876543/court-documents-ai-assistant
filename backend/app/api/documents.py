@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi import HTTPException
@@ -18,6 +19,7 @@ from app.schemas.document import (
     UploadResponse,
 )
 from app.services.document_service import (
+    apply_processing_result,
     create_document,
     find_duplicate,
 )
@@ -28,6 +30,20 @@ from app.services.file_service import (
     save_file,
     validate_file_extension,
 )
+
+
+DOCUMENT_PROCESSING_SRC = (
+    Path(__file__).resolve().parents[3]
+    / "document_processing"
+    / "src"
+)
+
+if str(DOCUMENT_PROCESSING_SRC) not in sys.path:
+    sys.path.append(
+        str(DOCUMENT_PROCESSING_SRC)
+    )
+
+from api_adapter import build_api_result
 
 
 router = APIRouter(
@@ -43,16 +59,16 @@ def document_to_response(document: Document) -> dict:
         "id": document.id,
         "filename": file.original_filename if file else "",
         "documentType": document.document_type,
-        "caseNumber": None,
+        "caseNumber": document.case_number,
         "enforcementNumber": None,
         "status": document.status,
         "createdAt": document.created_at,
-        "summary": "",
-        "needsReview": False,
-        "reviewReason": None,
+        "summary": document.summary or "",
+        "needsReview": document.needs_review,
+        "reviewReason": document.review_reason,
         "files": document.files,
-        "debtor": None,
-        "amount": None,
+        "debtor": document.debtor,
+        "amount": document.amount,
         "fileFormat": file.file_format if file else "pdf",
     }
 
@@ -62,12 +78,17 @@ def document_to_response(document: Document) -> dict:
     response_model=UploadResponse
 )
 async def upload_documents(
-    files: list[UploadFile] = File(...),
+    file: UploadFile = File(
+        ...,
+        description="PDF/XML документ"
+    ),
     db: Session = Depends(get_db)
 ):
     uploaded = []
     duplicates = []
     errors = []
+
+    files = [file]
 
     for file in files:
         saved_path = None
@@ -115,6 +136,20 @@ async def upload_documents(
                 file_hash=file_hash
             )
 
+            document.status = "processing"
+            db.commit()
+            db.refresh(document)
+
+            processing_result = build_api_result(
+                saved_path
+            )
+
+            document = apply_processing_result(
+                db=db,
+                document=document,
+                result=processing_result,
+            )
+
             uploaded.append(
                 UploadedDocumentResponse(
                     document_id=document.id,
@@ -142,7 +177,8 @@ async def upload_documents(
                 )
             )
 
-        except Exception:
+        except Exception as exc:
+
             if saved_path and Path(saved_path).exists():
                 Path(saved_path).unlink()
 
@@ -154,7 +190,7 @@ async def upload_documents(
                     error="Database or internal error"
                 )
             )
-
+        
     return UploadResponse(
         uploaded=uploaded,
         duplicates=duplicates,
