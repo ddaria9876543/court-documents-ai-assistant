@@ -614,7 +614,7 @@ def ocr_pdf(
 
     result = []
 
-    for page_number in useful_pages:
+    for page_number in [p for p in useful_pages if 1 <= p <= len(document)]:
 
         print(
             f"Обработка страницы "
