@@ -15,6 +15,18 @@ VALID_STATUSES = {
 }
 
 
+# Эти поля являются служебными и не должны
+# считаться "неизвлечёнными" реквизитами документа.
+SERVICE_FIELDS = {
+    "warnings",
+    "status",
+    "missing_fields",
+    "requires_legal_action",
+    "legal_action_reason",
+    "evidence_fragment",
+}
+
+
 def is_valid_inn(value: str | None) -> bool:
     """
     Базовая проверка ИНН.
@@ -75,7 +87,7 @@ def is_valid_date(
     value: str | None,
 ) -> bool:
     """
-    Проверяет YYYY-MM-DD.
+    Проверяет дату в формате YYYY-MM-DD.
     """
 
     if value is None:
@@ -121,11 +133,58 @@ def is_valid_amount(
     return amount >= 0
 
 
+def rebuild_missing_fields(
+    fields: OfficialExtractedFields,
+) -> None:
+    """
+    Пересобирает missing_fields.
+
+    Учитываются только реальные поля документа.
+
+    Служебные поля:
+    - status
+    - warnings
+    - requires_legal_action
+    - legal_action_reason
+    - evidence_fragment
+
+    не должны попадать в missing_fields.
+    """
+
+    data = fields.model_dump()
+
+    missing_fields = []
+
+    for field_name, value in data.items():
+
+        if field_name in SERVICE_FIELDS:
+            continue
+
+        if value is None:
+            missing_fields.append(
+                field_name
+            )
+
+        elif (
+            isinstance(value, str)
+            and not value.strip()
+        ):
+            missing_fields.append(
+                field_name
+            )
+
+    fields.missing_fields = missing_fields
+
+
 def determine_status(
     fields: OfficialExtractedFields,
 ) -> str:
     """
-    Определяет общий статус результата.
+    Определяет общий технический статус результата.
+
+    Важно:
+    requires_legal_action не влияет
+    на технический status.
 
     Приоритет:
     invalid
@@ -205,8 +264,9 @@ def validate_official_fields(
 ) -> OfficialExtractedFields:
     """
     Проверяет критичные поля,
-    добавляет warnings
-    и выставляет общий status.
+    добавляет warnings,
+    пересобирает missing_fields
+    и выставляет общий технический status.
     """
 
     warnings = list(
@@ -251,8 +311,12 @@ def validate_official_fields(
     # --------------------------------
 
     date_fields = {
-        "birth_date": fields.birth_date,
-        "case_date": fields.case_date,
+        "birth_date": (
+            fields.birth_date
+        ),
+        "case_date": (
+            fields.case_date
+        ),
         "debt_period_start": (
             fields.debt_period_start
         ),
@@ -295,12 +359,27 @@ def validate_official_fields(
                 f"invalid_{field_name}"
             )
 
-    # Убираем случайные дубли warnings
+    # --------------------------------
+    # Убираем дубли warnings
+    # --------------------------------
+
     fields.warnings = list(
         dict.fromkeys(
             warnings
         )
     )
+
+    # --------------------------------
+    # Пересобираем missing_fields
+    # --------------------------------
+
+    rebuild_missing_fields(
+        fields
+    )
+
+    # --------------------------------
+    # Определяем технический статус
+    # --------------------------------
 
     fields.status = determine_status(
         fields

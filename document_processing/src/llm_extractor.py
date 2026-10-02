@@ -1,7 +1,10 @@
+import re
+import time
+from datetime import datetime
 from typing import Optional, Type
 
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from models import (
     OfficialExtractedFields,
@@ -45,7 +48,6 @@ class DebtorCandidate(BaseModel):
     """
 
     full_name: Optional[str] = None
-
     birth_date: Optional[str] = None
 
     street: Optional[str] = None
@@ -59,13 +61,34 @@ class DebtorCandidate(BaseModel):
 
 class DebtorsExtraction(BaseModel):
     """
-    Список всех должников,
-    обнаруженных в документе.
+    Список всех найденных должников.
     """
 
     debtors: list[DebtorCandidate] = Field(
         default_factory=list
     )
+
+
+# ============================================================
+# Regex
+# ============================================================
+
+CASE_NUMBER_PATTERN = re.compile(
+    r"\b\d{1,3}-\d{1,7}(?:-\d{1,4})?/\d{4}\b"
+)
+
+DATE_DMY_PATTERN = re.compile(
+    r"\b\d{2}\.\d{2}\.\d{4}\b"
+)
+
+DATE_YMD_PATTERN = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}\b"
+)
+
+MONEY_PATTERN = re.compile(
+    r"\b\d[\d\s]*(?:[.,]\d{1,2})?\s*(?:руб|рублей)\b",
+    re.IGNORECASE,
+)
 
 
 # ============================================================
@@ -75,10 +98,13 @@ class DebtorsExtraction(BaseModel):
 def call_ollama_json(
     prompt: str,
     response_model: Type[BaseModel],
+    *,
+    pass_name: str,
+    num_predict: int,
 ) -> BaseModel:
     """
     Отправляет задачу в локальную Qwen через Ollama
-    и требует ответ по заданной JSON-схеме.
+    и валидирует ответ по Pydantic JSON-схеме.
     """
 
     schema = response_model.model_json_schema()
@@ -87,34 +113,53 @@ def call_ollama_json(
         "model": MODEL_NAME,
         "prompt": prompt,
         "stream": False,
-        "format": schema,
         "think": False,
+        "format": schema,
         "keep_alive": "10m",
         "options": {
             "temperature": 0,
             "num_ctx": 2048,
-            "num_predict": 250,
+            "num_predict": num_predict,
         },
     }
+
+    started = time.perf_counter()
+
+    print(
+        f"  Qwen [{pass_name}]: запуск, "
+        f"prompt={len(prompt)} символов..."
+    )
 
     try:
         response = requests.post(
             OLLAMA_URL,
             json=payload,
-            timeout=300,
+            timeout=90,
         )
 
-    except requests.RequestException as exc:
+    except requests.Timeout as exc:
         raise RuntimeError(
-            "Не удалось подключиться к Ollama. "
+            f"Qwen [{pass_name}]: превышен timeout Ollama."
+        ) from exc
+
+    except requests.ConnectionError as exc:
+        raise RuntimeError(
+            f"Qwen [{pass_name}]: Ollama недоступна. "
             "Проверь, что Ollama запущена."
         ) from exc
 
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Qwen [{pass_name}]: ошибка запроса к Ollama: "
+            f"{type(exc).__name__}."
+        ) from exc
+
+    elapsed = time.perf_counter() - started
+
     if response.status_code != 200:
         raise RuntimeError(
-            "Ollama вернула ошибку.\n"
-            f"HTTP: {response.status_code}\n"
-            f"Ответ: {response.text}"
+            f"Qwen [{pass_name}]: Ollama вернула "
+            f"HTTP {response.status_code}."
         )
 
     try:
@@ -122,7 +167,8 @@ def call_ollama_json(
 
     except ValueError as exc:
         raise RuntimeError(
-            "Ollama вернула некорректный JSON."
+            f"Qwen [{pass_name}]: Ollama вернула "
+            "некорректный HTTP JSON."
         ) from exc
 
     content = ollama_data.get(
@@ -130,116 +176,305 @@ def call_ollama_json(
         "",
     )
 
-    if not content.strip():
+    if (
+        not isinstance(content, str)
+        or not content.strip()
+    ):
         raise ValueError(
-            "Qwen вернула пустой ответ."
+            f"Qwen [{pass_name}]: модель вернула пустой ответ."
         )
 
     try:
-        return response_model.model_validate_json(
+        result = response_model.model_validate_json(
             content
         )
 
-    except Exception as exc:
+    except ValidationError as exc:
         raise ValueError(
-            "Не удалось преобразовать "
-            "ответ Qwen в требуемую модель.\n\n"
-            f"Ответ Qwen:\n{content}"
+            f"Qwen [{pass_name}]: ответ модели "
+            "не соответствует JSON-схеме "
+            f"({exc.error_count()} ошибок валидации)."
         ) from exc
 
+    except Exception as exc:
+        raise ValueError(
+            f"Qwen [{pass_name}]: не удалось "
+            "обработать JSON-ответ модели."
+        ) from exc
 
-# ============================================================
-# Проход №1
-# Факты документа
-# ============================================================
-
-def extract_document_facts(
-    document: ParsedDocument,
-) -> DocumentFacts:
-    """
-    Извлекает факты,
-    относящиеся к документу в целом.
-    """
-
-    prompt = f"""
-Извлеки данные из российского судебного документа.
-
-Используй только информацию из текста.
-Не придумывай значения.
-Если значения нет — верни null.
-
-Нужно извлечь:
-
-- document_type
-- case_number
-- case_date
-- debt_period_start
-- debt_period_end
-- principal_debt
-- penalty_amount
-- state_duty
-
-Правила:
-
-document_type — только одно значение:
-- судебный приказ
-- исполнительный лист
-- постановление ФССП
-
-case_number — номер судебного дела.
-
-case_date — дата судебного акта или дата дела,
-относящаяся к номеру дела.
-
-Все даты приводи к формату YYYY-MM-DD.
-
-debt_period_start — начало периода задолженности.
-debt_period_end — конец периода задолженности.
-
-principal_debt — сумма основного долга.
-penalty_amount — сумма пеней.
-state_duty — государственная пошлина.
-
-Денежные значения возвращай только числом строкой.
-Не добавляй "руб." и другие обозначения валюты.
-
-Не извлекай персональные данные должников.
-Не пытайся определить основного должника.
-
-ТЕКСТ ДОКУМЕНТА:
-
-{document.full_text}
-"""
-
-    result = call_ollama_json(
-        prompt=prompt,
-        response_model=DocumentFacts,
+    print(
+        f"  Qwen [{pass_name}]: готово за "
+        f"{elapsed:.2f} сек."
     )
 
     return result
 
 
 # ============================================================
-# Проход №2
-# Все должники
+# Выбор контекста для facts-pass
+# ============================================================
+
+FACT_KEYWORDS = (
+    "дело",
+    "судебный приказ",
+    "исполнительный лист",
+    "решение",
+    "постановление",
+    "задолженность",
+    "основной долг",
+    "долг",
+    "пени",
+    "пеня",
+    "госпошлина",
+    "государственная пошлина",
+    "государственной пошлины",
+    "за период",
+    "взыскать",
+    "взыскание",
+    "руб.",
+    "рублей",
+)
+
+
+def find_case_number_candidates(
+    text: str,
+) -> list[str]:
+    """
+    Ищет явные номера судебных дел в тексте.
+    """
+
+    candidates = []
+
+    for match in CASE_NUMBER_PATTERN.finditer(text):
+        value = match.group(0).strip()
+
+        if value not in candidates:
+            candidates.append(value)
+
+    return candidates
+
+
+def build_facts_context(
+    text: str,
+    max_chars: int = 6000,
+) -> str:
+    """
+    Собирает релевантные фрагменты текста для facts-pass.
+    """
+
+    if not text:
+        return ""
+
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+    if not lines:
+        return text[:max_chars]
+
+    selected_indexes: set[int] = set()
+
+    # Начало документа.
+    for index in range(
+        min(25, len(lines))
+    ):
+        selected_indexes.add(index)
+
+    # Юридически значимые строки.
+    for index, line in enumerate(lines):
+        lower_line = line.lower()
+
+        has_keyword = any(
+            keyword in lower_line
+            for keyword in FACT_KEYWORDS
+        )
+
+        has_case_number = bool(
+            CASE_NUMBER_PATTERN.search(line)
+        )
+
+        if has_keyword or has_case_number:
+
+            start = max(
+                0,
+                index - 2,
+            )
+
+            end = min(
+                len(lines),
+                index + 4,
+            )
+
+            for nearby_index in range(
+                start,
+                end,
+            ):
+                selected_indexes.add(
+                    nearby_index
+                )
+
+    # Строки с номером дела.
+    for index, line in enumerate(lines):
+
+        if CASE_NUMBER_PATTERN.search(line):
+
+            selected_indexes.add(index)
+
+            if index > 0:
+                selected_indexes.add(
+                    index - 1
+                )
+
+            if index + 1 < len(lines):
+                selected_indexes.add(
+                    index + 1
+                )
+
+    # Денежные строки около юридически значимого контекста.
+    for index, line in enumerate(lines):
+
+        if not MONEY_PATTERN.search(line):
+            continue
+
+        start = max(
+            0,
+            index - 2,
+        )
+
+        end = min(
+            len(lines),
+            index + 3,
+        )
+
+        nearby_text = " ".join(
+            lines[start:end]
+        ).lower()
+
+        if any(
+            keyword in nearby_text
+            for keyword in FACT_KEYWORDS
+        ):
+            for nearby_index in range(
+                start,
+                end,
+            ):
+                selected_indexes.add(
+                    nearby_index
+                )
+
+    ordered_indexes = sorted(
+        selected_indexes
+    )
+
+    selected_lines = [
+        lines[index]
+        for index in ordered_indexes
+    ]
+
+    context = "\n".join(
+        selected_lines
+    )
+
+    if len(context) < 500:
+        context = text
+
+    if len(context) > max_chars:
+        context = context[:max_chars]
+
+    return context
+
+
+# ============================================================
+# Проход №1 — факты документа
+# ============================================================
+
+def extract_document_facts(
+    document: ParsedDocument,
+) -> DocumentFacts:
+    """
+    Извлекает факты документа.
+    """
+
+    context = build_facts_context(
+        document.full_text
+    )
+
+    print(
+        "  Facts context: "
+        f"{len(document.full_text)} -> "
+        f"{len(context)} символов"
+    )
+
+    prompt = f"""
+Извлеки факты из российского судебного документа.
+
+Используй только явно указанные в тексте значения.
+Если значение отсутствует или неоднозначно — верни null.
+Ничего не придумывай.
+
+Поля:
+- document_type: только "судебный приказ",
+  "исполнительный лист" или "постановление ФССП";
+- case_number: номер судебного дела,
+  НЕ номер исполнительного производства;
+- case_date: дата судебного акта,
+  относящаяся к case_number;
+- debt_period_start;
+- debt_period_end;
+- principal_debt;
+- penalty_amount;
+- state_duty.
+
+Правила извлечения:
+- фраза "за период с ДАТА по ДАТА" означает
+  debt_period_start и debt_period_end;
+- сумма "задолженности" или "основного долга"
+  означает principal_debt;
+- сумма "пени" или "пеней"
+  означает penalty_amount;
+- сумма "государственной пошлины" или "госпошлины"
+  означает state_duty.
+
+Не путай:
+- основной долг и пени;
+- госпошлину и общий долг;
+- дату судебного акта с другими датами;
+- номер дела с номером исполнительного производства.
+
+Даты верни в формате YYYY-MM-DD.
+Денежные суммы верни строкой только с числом.
+
+Текст:
+{context}
+"""
+
+    result = call_ollama_json(
+        prompt=prompt,
+        response_model=DocumentFacts,
+        pass_name="facts",
+        num_predict=300,
+    )
+
+    return result
+
+
+# ============================================================
+# Проход №2 — должники
 # ============================================================
 
 def extract_debtors(
     document: ParsedDocument,
 ) -> DebtorsExtraction:
     """
-    Отдельно извлекает всех должников.
+    Извлекает всех должников.
     """
 
     prompt = f"""
-Найди всех должников, ответчиков или соответчиков
-в российском судебном документе.
-
-Используй только информацию из текста.
-Не придумывай значения.
+Извлеки ВСЕХ должников из российского судебного документа.
 
 Для каждого должника извлеки:
-
 - full_name
 - birth_date
 - street
@@ -250,46 +485,176 @@ def extract_debtors(
 - inn
 
 Правила:
+- включай только лиц, прямо указанных как должники;
+- каждого должника возвращай отдельным объектом;
+- не включай взыскателя, организацию-взыскателя,
+  судью, судебного пристава или представителя;
+- не объединяй нескольких должников в одного;
+- ИНН организации-взыскателя не является ИНН должника;
+- ИНН, СНИЛС, паспорт, дату рождения и адрес
+  связывай только с конкретным должником;
+- если принадлежность реквизита конкретному должнику
+  неоднозначна, верни null;
+- если значение отсутствует, верни null;
+- ничего не придумывай.
 
-Не включай:
-- взыскателя;
-- судью;
-- представителя суда;
-- судебного пристава;
-- организации и других лиц,
-  которые не являются должниками.
-
-Если должников несколько —
-верни каждого отдельным объектом списка debtors.
-
-full_name возвращай в именительном падеже,
-если это можно однозначно определить из текста.
-
-Все даты приводи к формату YYYY-MM-DD.
-
-Адрес разделяй на:
-- street
-- house
-- apartment
-
-ИНН взыскателя или организации
-не записывай как ИНН должника.
-
-Если паспорт, СНИЛС, ИНН или другое поле
-для конкретного должника отсутствует —
-верни null.
-
-ТЕКСТ ДОКУМЕНТА:
-
+Текст:
 {document.full_text}
 """
 
     result = call_ollama_json(
         prompt=prompt,
         response_model=DebtorsExtraction,
+        pass_name="debtors",
+        num_predict=1200,
     )
 
     return result
+
+
+# ============================================================
+# Нормализация
+# ============================================================
+
+def normalize_date(
+    value: Optional[str],
+) -> Optional[str]:
+    """
+    Приводит распространённые форматы дат
+    к YYYY-MM-DD.
+    """
+
+    if not value:
+        return None
+
+    value = value.strip()
+
+    formats = (
+        "%Y-%m-%d",
+        "%d.%m.%Y",
+        "%d/%m/%Y",
+    )
+
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(
+                value,
+                fmt,
+            )
+
+            return parsed.strftime(
+                "%Y-%m-%d"
+            )
+
+        except ValueError:
+            continue
+
+    return value
+
+
+def normalize_case_number(
+    value: Optional[str],
+    text: str,
+) -> Optional[str]:
+    """
+    Исправляет только очевидные ошибки case_number.
+
+    Не пытается придумывать номер дела.
+    """
+
+    candidates = find_case_number_candidates(
+        text
+    )
+
+    # Если Qwen ничего не вернула,
+    # но в тексте есть ровно один хороший кандидат.
+    if not value:
+        if len(candidates) == 1:
+            return candidates[0]
+
+        return None
+
+    value = value.strip()
+
+    # Дата точно не является номером дела.
+    if (
+        DATE_DMY_PATTERN.fullmatch(value)
+        or DATE_YMD_PATTERN.fullmatch(value)
+    ):
+        if len(candidates) == 1:
+            return candidates[0]
+
+        return None
+
+    # Уже корректный номер.
+    if CASE_NUMBER_PATTERN.fullmatch(value):
+        return value
+
+    # Если есть единственный regex-кандидат,
+    # используем его вместо OCR-мусора.
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Попытка сопоставить повреждённый ответ с кандидатом.
+    digits_value = re.sub(
+        r"\D",
+        "",
+        value,
+    )
+
+    for candidate in candidates:
+        digits_candidate = re.sub(
+            r"\D",
+            "",
+            candidate,
+        )
+
+        if not digits_value:
+            continue
+
+        if (
+            digits_value.endswith(
+                digits_candidate
+            )
+            or digits_candidate.endswith(
+                digits_value
+            )
+        ):
+            return candidate
+
+    return value
+
+
+def normalize_llm_results(
+    facts: DocumentFacts,
+    debtors_result: DebtorsExtraction,
+    document_text: str,
+) -> None:
+    """
+    Минимальная постобработка.
+    """
+
+    facts.case_number = normalize_case_number(
+        facts.case_number,
+        document_text,
+    )
+
+    facts.case_date = normalize_date(
+        facts.case_date
+    )
+
+    facts.debt_period_start = normalize_date(
+        facts.debt_period_start
+    )
+
+    facts.debt_period_end = normalize_date(
+        facts.debt_period_end
+    )
+
+    for debtor in debtors_result.debtors:
+        debtor.birth_date = normalize_date(
+            debtor.birth_date
+        )
 
 
 # ============================================================
@@ -336,17 +701,14 @@ def get_common_value(
     field_name: str,
 ) -> Optional[str]:
     """
-    Если одно и то же значение указано
-    у всех должников, его можно безопасно
-    использовать как общее.
-
-    Например, у ocr_012.pdf
-    все три должника имеют один адрес.
+    Если значение одинаковое у всех должников,
+    возвращает его как общее.
     """
 
     values = []
 
     for debtor in debtors:
+
         value = getattr(
             debtor,
             field_name,
@@ -378,8 +740,7 @@ def build_co_defendants_names(
     debtors: list[DebtorCandidate],
 ) -> Optional[str]:
     """
-    Формирует строку со всеми найденными
-    должниками.
+    Формирует строку со всеми должниками.
     """
 
     names = [
@@ -406,17 +767,15 @@ def merge_results(
     debtors_result: DebtorsExtraction,
 ) -> OfficialExtractedFields:
     """
-    Объединяет результаты двух проходов
-    в официальный формат.
+    Объединяет результаты двух проходов.
+
+    Бизнес-логика выбора основного должника
+    намеренно не меняется.
     """
 
     debtors = debtors_result.debtors
 
     warnings = []
-
-    # ----------------------------------------
-    # Основной должник
-    # ----------------------------------------
 
     primary_debtor = None
 
@@ -429,10 +788,6 @@ def merge_results(
             "Основной должник пока не определён "
             "однозначно."
         )
-
-    # ----------------------------------------
-    # Персональные поля
-    # ----------------------------------------
 
     full_name = None
     birth_date = None
@@ -474,17 +829,6 @@ def merge_results(
             full_name
         )
 
-    # ----------------------------------------
-    # Адрес
-    # ----------------------------------------
-    #
-    # Если должник один — берём его адрес.
-    #
-    # Если их несколько, но адрес у всех
-    # одинаковый — его можно безопасно
-    # сохранить.
-    # ----------------------------------------
-
     if primary_debtor is not None:
 
         street = primary_debtor.street
@@ -509,10 +853,6 @@ def merge_results(
             debtors,
             "apartment",
         )
-
-    # ----------------------------------------
-    # Все должники
-    # ----------------------------------------
 
     defendants_names = (
         build_co_defendants_names(
@@ -588,6 +928,10 @@ def merge_results(
     return fields
 
 
+# ============================================================
+# Missing fields
+# ============================================================
+
 def fill_missing_fields(
     fields: OfficialExtractedFields,
 ) -> OfficialExtractedFields:
@@ -637,30 +981,29 @@ def extract_fields_with_llm(
     """
     Главная точка входа.
 
-    1. Извлекаем факты документа.
-    2. Отдельно извлекаем всех должников.
-    3. Объединяем результаты.
+    1. Извлекаем факты.
+    2. Извлекаем должников.
+    3. Нормализуем результат.
+    4. Объединяем результаты.
     """
 
     if not document.full_text.strip():
         raise ValueError(
-            "ParsedDocument не содержит текста."
+            "ParsedDocument не содержит текст."
         )
-
-    print(
-        "  Qwen: извлечение фактов документа..."
-    )
 
     facts = extract_document_facts(
         document
     )
 
-    print(
-        "  Qwen: извлечение должников..."
-    )
-
     debtors = extract_debtors(
         document
+    )
+
+    normalize_llm_results(
+        facts,
+        debtors,
+        document.full_text,
     )
 
     fields = merge_results(

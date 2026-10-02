@@ -61,6 +61,10 @@ class Document(Base):
         nullable=True
     )
 
+    # ========================================
+    # Техническая ручная проверка
+    # ========================================
+
     needs_review: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -68,6 +72,32 @@ class Document(Base):
     )
 
     review_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+
+    # ========================================
+    # Юридическая маршрутизация
+    # ========================================
+
+    # Требует ли содержание акта действий юриста.
+    # Не путать с needs_review:
+    # needs_review = техническая проблема распознавания/извлечения.
+    requires_legal_action: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False
+    )
+
+    # Причина передачи документа юристу.
+    legal_action_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+
+    # Фрагмент документа,
+    # подтверждающий необходимость действий.
+    evidence_fragment: Mapped[str | None] = mapped_column(
         Text,
         nullable=True
     )

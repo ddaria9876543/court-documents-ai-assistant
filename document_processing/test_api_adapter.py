@@ -1,30 +1,41 @@
-import json
 import sys
 from pathlib import Path
 
-sys.path.append(
-    str(Path(__file__).parent / "src")
-)
+sys.path.append("src")
 
 from api_adapter import build_api_result
 
 
-if len(sys.argv) < 2:
-    print(
-        "Использование: "
-        "python test_api_adapter.py <путь_к_файлу>"
-    )
-    sys.exit(1)
+XML_PATH = Path(
+    r"C:\Users\baigina\inter-rao-court-docs\data\raw_part3\courts_anonymized\fssp\O_IP_ACT_RETURN\fssp_016.xml"
+)
 
 
-file_path = Path(sys.argv[1])
-
-result = build_api_result(file_path)
+result = build_api_result(
+    XML_PATH
+)
 
 print(
-    json.dumps(
-        result,
-        ensure_ascii=False,
-        indent=2,
-    )
+    "requires_legal_action:",
+    result["requires_legal_action"],
+)
+
+print(
+    "legal_action_reason:",
+    result["legal_action_reason"],
+)
+
+print(
+    "evidence_fragment:",
+    result["evidence_fragment"],
+)
+
+print(
+    "status:",
+    result["status"],
+)
+
+print(
+    "missing_fields:",
+    result["missing_fields"],
 )

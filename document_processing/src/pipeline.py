@@ -4,6 +4,7 @@ import pymupdf
 
 from field_extractor import extract_fields
 from llm_extractor import extract_fields_with_llm
+from legal_action_classifier import classify_legal_action
 
 from models import (
     ParsedDocument,
@@ -74,9 +75,6 @@ def has_enough_text(
     """
     Определяет, есть ли в PDF
     нормальный текстовый слой.
-
-    Не требуем текст на каждой странице:
-    часть страниц может быть пустой.
     """
 
     full_text = "\n".join(
@@ -196,9 +194,6 @@ def process_pdf(
         if page.text.strip()
     )
 
-    # Старый extractor пока оставляем
-    # для ParsedDocument и обратной
-    # совместимости.
     fields = build_extracted_fields(
         full_text
     )
@@ -258,13 +253,6 @@ def process_document(
     Единая техническая точка входа.
 
     Возвращает ParsedDocument.
-
-    Используется, когда нужен:
-    - распознанный текст;
-    - страницы;
-    - метод извлечения;
-    - warnings;
-    - техническая информация.
     """
 
     path = Path(
@@ -299,19 +287,68 @@ def process_document(
     )
 
 
+def add_legal_action_result(
+    fields: OfficialExtractedFields,
+    full_text: str,
+) -> OfficialExtractedFields:
+    """
+    Анализирует содержание документа
+    и добавляет результат юридической
+    маршрутизации.
+
+    Важно:
+
+    needs_review / status unclear —
+    техническая ручная проверка
+    из-за проблем OCR, извлечения
+    или противоречивых реквизитов.
+
+    requires_legal_action —
+    документ по своему содержанию
+    требует внимания юриста.
+
+    Решение о дальнейших юридических
+    действиях остаётся за сотрудником.
+    """
+
+    legal_action = classify_legal_action(
+        full_text,
+        fields.model_dump(),
+    )
+
+    return fields.model_copy(
+        update={
+            "requires_legal_action":
+                legal_action[
+                    "requires_legal_action"
+                ],
+
+            "legal_action_reason":
+                legal_action[
+                    "legal_action_reason"
+                ],
+
+            "evidence_fragment":
+                legal_action[
+                    "evidence_fragment"
+                ],
+        }
+    )
+
+
 def process_document_official(
     file_path: str | Path,
 ) -> OfficialExtractedFields:
     """
-    Финальная точка входа для получения
-    полей официального шаблона организаторов.
+    Финальная точка входа.
 
     PDF:
     PDF
     -> PyMuPDF / Tesseract
     -> ParsedDocument
-    -> Qwen3-8B
+    -> Qwen
     -> validators
+    -> legal action classifier
     -> OfficialExtractedFields
 
     XML:
@@ -319,7 +356,45 @@ def process_document_official(
     -> lxml
     -> структурированные теги
     -> validators
+    -> legal action classifier
     -> OfficialExtractedFields
+
+
+    Юридическая маршрутизация:
+
+    requires_legal_action = True,
+    например при:
+
+    - отказе в возбуждении
+      исполнительного производства;
+
+    - возврате исполнительного
+      документа без полного взыскания;
+
+    - отмене судебного приказа;
+
+    - отказе в требованиях;
+
+    - возврате заявления;
+
+    - требовании устранить недостатки;
+
+    - требовании представить
+      дополнительные документы;
+
+    - прекращении или окончании
+      производства, если взыскание
+      не завершено.
+
+    Окончание производства после
+    полного взыскания само по себе
+    действий юриста не требует.
+
+    Для положительного решения
+    сохраняются:
+
+    legal_action_reason
+    evidence_fragment
     """
 
     path = Path(
@@ -363,6 +438,11 @@ def process_document_official(
             fields
         )
 
+        fields = add_legal_action_result(
+            fields,
+            document.full_text,
+        )
+
         return fields
 
     # ========================================
@@ -370,6 +450,10 @@ def process_document_official(
     # ========================================
 
     if extension == ".xml":
+
+        document = process_xml(
+            path
+        )
 
         fields = (
             extract_official_fields_from_xml(
@@ -379,6 +463,11 @@ def process_document_official(
 
         fields = validate_official_fields(
             fields
+        )
+
+        fields = add_legal_action_result(
+            fields,
+            document.full_text,
         )
 
         return fields

@@ -1,4 +1,5 @@
 from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -61,6 +62,7 @@ class ParsedDocument(BaseModel):
 
     status: str = "ok"
 
+
 class OfficialExtractedFields(BaseModel):
     # Тип документа:
     # судебный приказ / исполнительный лист / постановление ФССП
@@ -99,7 +101,7 @@ class OfficialExtractedFields(BaseModel):
     co_defendants_count: Optional[int] = None
     co_defendants_names: Optional[str] = None
 
-    # Поля, которые LLM не смогла уверенно извлечь
+    # Поля, которые не удалось уверенно извлечь
     missing_fields: list[str] = Field(
         default_factory=list
     )
@@ -108,5 +110,22 @@ class OfficialExtractedFields(BaseModel):
     warnings: list[str] = Field(
         default_factory=list
     )
-        # Общий статус результата
+
+    # Общий технический статус результата:
+    # ok / unclear / error и т.п.
     status: str = "ok"
+
+    # ========================================
+    # Юридическая маршрутизация
+    # ========================================
+
+    # Требует ли содержание акта действий юриста.
+    # Это НЕ то же самое, что техническая ручная проверка.
+    requires_legal_action: bool = False
+
+    # Почему документ передаётся юристу.
+    legal_action_reason: Optional[str] = None
+
+    # Фрагмент документа,
+    # подтверждающий причину передачи.
+    evidence_fragment: Optional[str] = None

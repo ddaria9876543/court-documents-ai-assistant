@@ -22,13 +22,25 @@ export interface Document {
   documentType: string;
   caseNumber?: string;
   enforcementNumber?: string;
+
   status: DocumentStatus;
   createdAt: string;
+
   summary: string;
+
+  // Техническая ручная проверка
   needsReview: boolean;
   reviewReason?: string;
+
+  // Юридическая маршрутизация
+  requiresLegalAction: boolean;
+  legalActionReason?: string;
+  evidenceFragment?: string;
+
   files: DocumentFile[];
+
   debtor?: string;
   amount?: number;
+
   fileFormat: 'pdf' | 'xml';
 }

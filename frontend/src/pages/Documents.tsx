@@ -132,6 +132,21 @@ export default function Documents() {
       ellipsis: true,
     },
     {
+      title: 'Работа юриста',
+      key: 'legalAction',
+      width: 150,
+      render: (_: unknown, record: Document) =>
+        record.requiresLegalAction ? (
+          <Tag color="orange">
+            Требуется
+          </Tag>
+        ) : (
+          <Tag color="green">
+            Не требуется
+          </Tag>
+        ),
+    },
+    {
       title: 'Статус',
       dataIndex: 'status',
       sorter: (a: Document, b: Document) =>

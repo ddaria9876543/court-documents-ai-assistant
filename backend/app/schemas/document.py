@@ -32,18 +32,32 @@ class DocumentHistoryResponse(BaseModel):
 class DocumentListResponse(BaseModel):
     id: int
     filename: str
+
     documentType: str | None = None
     caseNumber: str | None = None
     enforcementNumber: str | None = None
+
     status: DocumentStatus
     createdAt: datetime
+
     summary: str = ""
+
+    # Техническая ручная проверка
     needsReview: bool = False
     reviewReason: str | None = None
+
+    # Юридическая маршрутизация
+    requiresLegalAction: bool = False
+    legalActionReason: str | None = None
+    evidenceFragment: str | None = None
+
     dataVerified: bool = False
+
     files: list[DocumentFileResponse]
+
     debtor: str | None = None
     amount: float | None = None
+
     fileFormat: Literal["pdf", "xml"]
 
     model_config = ConfigDict(from_attributes=True)

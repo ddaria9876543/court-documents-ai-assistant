@@ -15,6 +15,7 @@ import {
   Typography,
   message,
 } from 'antd'
+
 import { CheckCircleOutlined } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -32,8 +33,14 @@ interface DocumentData {
   status: string
   createdAt: string
   summary?: string | null
+
   needsReview?: boolean
   reviewReason?: string | null
+
+  requiresLegalAction?: boolean
+  legalActionReason?: string | null
+  evidenceFragment?: string | null
+
   dataVerified?: boolean
   debtor?: string | null
   amount?: number | null
@@ -588,6 +595,18 @@ export default function DocumentDetail() {
                       {doc.reviewReason}
                     </Descriptions.Item>
                   )}
+
+                  <Descriptions.Item label="Работа юриста">
+                    {doc.requiresLegalAction ? (
+                      <Tag color="orange">
+                        Требуется
+                      </Tag>
+                    ) : (
+                      <Tag color="green">
+                        Не требуется
+                      </Tag>
+                    )}
+                  </Descriptions.Item>
                 </Descriptions>
 
                 <Title
@@ -603,6 +622,58 @@ export default function DocumentDetail() {
                   {doc.summary ||
                     'Краткое описание отсутствует'}
                 </Text>
+
+                {doc.requiresLegalAction && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="Требуется действие юриста"
+                    description={
+                      <div>
+                        <div>
+                          <strong>
+                            Причина:
+                          </strong>{' '}
+                          {doc.legalActionReason ||
+                            'Документ требует дополнительной юридической обработки.'}
+                        </div>
+
+                        {doc.evidenceFragment && (
+                          <div
+                            style={{
+                              marginTop: 8,
+                            }}
+                          >
+                            <strong>
+                              Подтверждающий фрагмент:
+                            </strong>
+
+                            <div
+                              style={{
+                                marginTop: 4,
+                              }}
+                            >
+                              {doc.evidenceFragment}
+                            </div>
+                          </div>
+                        )}
+
+                        <div
+                          style={{
+                            marginTop: 12,
+                          }}
+                        >
+                          Решение о дальнейших
+                          юридических действиях
+                          принимает сотрудник.
+                        </div>
+                      </div>
+                    }
+                    style={{
+                      marginTop: 20,
+                    }}
+                  />
+                )}
 
                 {doc.status ===
                   'needs_review' && (
@@ -630,7 +701,8 @@ export default function DocumentDetail() {
                             marginBottom: 12,
                           }}
                         >
-                          Сравните данные с оригиналом документа.
+                          Сравните данные с
+                          оригиналом документа.
                         </Text>
 
                         <Space wrap>
@@ -689,7 +761,9 @@ export default function DocumentDetail() {
                             marginBottom: 12,
                           }}
                         >
-                          Определите, требуется ли передавать документ ответственному.
+                          Определите, требуется
+                          ли передавать документ
+                          ответственному.
                         </Text>
 
                         <Space wrap>
@@ -733,17 +807,64 @@ export default function DocumentDetail() {
                 )}
 
                 {doc.status ===
-                  'processed' && (
-                  <Alert
-                    type="success"
-                    showIcon
-                    message="Документ обработан"
-                    description="Данные проверены. Отправка ответственному не требуется."
-                    style={{
-                      marginTop: 20,
-                    }}
-                  />
-                )}
+                  'processed' &&
+                  !doc.requiresLegalAction && (
+                    <Alert
+                      type="success"
+                      showIcon
+                      message="Документ обработан"
+                      description="Дополнительных действий юриста не требуется."
+                      style={{
+                        marginTop: 20,
+                      }}
+                    />
+                  )}
+
+                {doc.status ===
+                  'processed' &&
+                  doc.requiresLegalAction && (
+                    <div
+                      style={{
+                        marginTop: 20,
+                      }}
+                    >
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          onClick={
+                            sendToResponsible
+                          }
+                          loading={
+                            actionLoading
+                          }
+                        >
+                          Отправить ответственному
+                        </Button>
+
+                        <Button
+                          onClick={
+                            markNoSendingRequired
+                          }
+                          loading={
+                            actionLoading
+                          }
+                        >
+                          Не требует отправки
+                        </Button>
+
+                        <Button
+                          onClick={
+                            startEditing
+                          }
+                          disabled={
+                            actionLoading
+                          }
+                        >
+                          Изменить данные
+                        </Button>
+                      </Space>
+                    </div>
+                  )}
 
                 {doc.status === 'sent' && (
                   <Alert
