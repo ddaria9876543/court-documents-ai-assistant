@@ -3,6 +3,7 @@ import sys
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi import HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -12,6 +13,7 @@ from app.models.document_history import DocumentHistory
 from app.schemas.document import (
     DocumentDetailResponse,
     DocumentListResponse,
+    DocumentUpdate,
     DuplicateResponse,
     StatusUpdate,
     UploadErrorResponse,
@@ -48,24 +50,31 @@ from api_adapter import build_api_result
 
 router = APIRouter(
     prefix="/documents",
-    tags=["Documents"]
+    tags=["Documents"],
 )
 
 
 def document_to_response(document: Document) -> dict:
     file = document.files[0] if document.files else None
 
+    extracted_data = document.extracted_data or {}
+
     return {
         "id": document.id,
         "filename": file.original_filename if file else "",
         "documentType": document.document_type,
         "caseNumber": document.case_number,
-        "enforcementNumber": None,
+        "enforcementNumber": extracted_data.get(
+            "enforcementNumber"
+        ),
         "status": document.status,
         "createdAt": document.created_at,
         "summary": document.summary or "",
         "needsReview": document.needs_review,
         "reviewReason": document.review_reason,
+        "dataVerified": bool(
+            extracted_data.get("dataVerified", False)
+        ),
         "files": document.files,
         "debtor": document.debtor,
         "amount": document.amount,
@@ -75,14 +84,14 @@ def document_to_response(document: Document) -> dict:
 
 @router.post(
     "/upload",
-    response_model=UploadResponse
+    response_model=UploadResponse,
 )
 async def upload_documents(
     file: UploadFile = File(
         ...,
-        description="PDF/XML документ"
+        description="PDF/XML документ",
     ),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     uploaded = []
     duplicates = []
@@ -104,7 +113,7 @@ async def upload_documents(
 
             duplicate = find_duplicate(
                 db,
-                file_hash
+                file_hash,
             )
 
             if duplicate:
@@ -112,7 +121,7 @@ async def upload_documents(
                     DuplicateResponse(
                         status="duplicate",
                         filename=file.filename or "",
-                        existing_document_id=duplicate.document_id
+                        existing_document_id=duplicate.document_id,
                     )
                 )
                 continue
@@ -123,7 +132,7 @@ async def upload_documents(
 
             saved_path = save_file(
                 content,
-                storage_filename
+                storage_filename,
             )
 
             document = create_document(
@@ -133,7 +142,7 @@ async def upload_documents(
                 file_path=str(saved_path),
                 file_format=extension.lstrip("."),
                 file_size=len(content),
-                file_hash=file_hash
+                file_hash=file_hash,
             )
 
             document.status = "processing"
@@ -154,7 +163,7 @@ async def upload_documents(
                 UploadedDocumentResponse(
                     document_id=document.id,
                     filename=file.filename or "",
-                    status=document.status
+                    status=document.status,
                 )
             )
 
@@ -162,7 +171,7 @@ async def upload_documents(
             errors.append(
                 UploadErrorResponse(
                     filename=file.filename or "",
-                    error=str(exc)
+                    error=str(exc),
                 )
             )
 
@@ -173,12 +182,11 @@ async def upload_documents(
             errors.append(
                 UploadErrorResponse(
                     filename=file.filename or "",
-                    error="File write error"
+                    error="File write error",
                 )
             )
 
-        except Exception as exc:
-
+        except Exception:
             if saved_path and Path(saved_path).exists():
                 Path(saved_path).unlink()
 
@@ -187,23 +195,23 @@ async def upload_documents(
             errors.append(
                 UploadErrorResponse(
                     filename=file.filename or "",
-                    error="Database or internal error"
+                    error="Database or internal error",
                 )
             )
-        
+
     return UploadResponse(
         uploaded=uploaded,
         duplicates=duplicates,
-        errors=errors
+        errors=errors,
     )
 
 
 @router.get(
     "",
-    response_model=list[DocumentListResponse]
+    response_model=list[DocumentListResponse],
 )
 def get_documents(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     documents = db.scalars(
         select(Document)
@@ -221,17 +229,17 @@ def get_documents(
 
 @router.get(
     "/{document_id}",
-    response_model=DocumentDetailResponse
+    response_model=DocumentDetailResponse,
 )
 def get_document(
     document_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     document = db.scalar(
         select(Document)
         .options(
             selectinload(Document.files),
-            selectinload(Document.history)
+            selectinload(Document.history),
         )
         .where(Document.id == document_id)
     )
@@ -239,8 +247,161 @@ def get_document(
     if document is None:
         raise HTTPException(
             status_code=404,
-            detail="Document not found"
+            detail="Document not found",
         )
+
+    response = document_to_response(document)
+    response["history"] = document.history
+
+    return response
+
+
+@router.get("/{document_id}/file")
+def get_document_file(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    document = db.scalar(
+        select(Document)
+        .options(
+            selectinload(Document.files)
+        )
+        .where(Document.id == document_id)
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    if not document.files:
+        raise HTTPException(
+            status_code=404,
+            detail="Document file not found",
+        )
+
+    file = document.files[0]
+    file_path = Path(file.file_path)
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="File not found on disk",
+        )
+
+    media_types = {
+        "pdf": "application/pdf",
+        "xml": "application/xml",
+    }
+
+    media_type = media_types.get(
+        file.file_format.lower(),
+        "application/octet-stream",
+    )
+
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+    )
+
+
+@router.put(
+    "/{document_id}/verify",
+    response_model=DocumentDetailResponse,
+)
+def verify_document_data(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    document = db.scalar(
+        select(Document)
+        .options(
+            selectinload(Document.files),
+            selectinload(Document.history),
+        )
+        .where(Document.id == document_id)
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    extracted_data = dict(
+        document.extracted_data or {}
+    )
+
+    extracted_data["dataVerified"] = True
+    document.extracted_data = extracted_data
+
+    history = DocumentHistory(
+        document_id=document.id,
+        event_type="data_verified",
+        message="Extracted document data verified manually",
+    )
+
+    db.add(history)
+    db.commit()
+    db.refresh(document)
+
+    response = document_to_response(document)
+    response["history"] = document.history
+
+    return response
+
+
+@router.put(
+    "/{document_id}/data",
+    response_model=DocumentDetailResponse,
+)
+def update_document_data(
+    document_id: int,
+    data: DocumentUpdate,
+    db: Session = Depends(get_db),
+):
+    document = db.scalar(
+        select(Document)
+        .options(
+            selectinload(Document.files),
+            selectinload(Document.history),
+        )
+        .where(Document.id == document_id)
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    document.document_type = data.documentType
+    document.case_number = data.caseNumber
+    document.debtor = data.debtor
+    document.amount = data.amount
+
+    extracted_data = dict(
+        document.extracted_data or {}
+    )
+
+    extracted_data["enforcementNumber"] = (
+        data.enforcementNumber
+    )
+
+    extracted_data["dataVerified"] = True
+
+    document.extracted_data = extracted_data
+
+    history = DocumentHistory(
+        document_id=document.id,
+        event_type="manual_edit",
+        message="Document data manually corrected and verified",
+    )
+
+    db.add(history)
+    db.commit()
+    db.refresh(document)
 
     response = document_to_response(document)
     response["history"] = document.history
@@ -250,18 +411,18 @@ def get_document(
 
 @router.put(
     "/{document_id}/status",
-    response_model=DocumentDetailResponse
+    response_model=DocumentDetailResponse,
 )
 def update_document_status(
     document_id: int,
     status_data: StatusUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     document = db.scalar(
         select(Document)
         .options(
             selectinload(Document.files),
-            selectinload(Document.history)
+            selectinload(Document.history),
         )
         .where(Document.id == document_id)
     )
@@ -269,11 +430,18 @@ def update_document_status(
     if document is None:
         raise HTTPException(
             status_code=404,
-            detail="Document not found"
+            detail="Document not found",
         )
 
     old_status = document.status
     document.status = status_data.status
+
+    if status_data.status in (
+        "processed",
+        "sent",
+    ):
+        document.needs_review = False
+        document.review_reason = None
 
     history = DocumentHistory(
         document_id=document.id,
@@ -281,7 +449,7 @@ def update_document_status(
         message=(
             f"Status changed from "
             f"{old_status} to {document.status}"
-        )
+        ),
     )
 
     db.add(history)

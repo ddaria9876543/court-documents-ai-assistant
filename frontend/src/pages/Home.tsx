@@ -226,35 +226,46 @@ export default function Home() {
         <Card
           title="Требует вашего внимания"
           style={{ marginBottom: 16 }}
+          styles={{
+            body: {
+              padding: '8px 24px 12px',
+            },
+          }}
         >
-          {sortedNeedsReview.map((doc) => (
+          {sortedNeedsReview.map((doc, index) => (
             <div
               key={doc.id}
               onClick={() =>
                 navigate(`/documents/${doc.id}`)
               }
               style={{
-                padding: '12px 0',
-                borderBottom: '1px solid #f0f0f0',
+                padding: '8px 0',
+                borderBottom:
+                  index < sortedNeedsReview.length - 1
+                    ? '1px solid #f0f0f0'
+                    : 'none',
                 cursor: 'pointer',
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
+                gap: 16,
               }}
             >
-              <div>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   style={{
                     fontWeight: 600,
+                    marginBottom: 2,
                   }}
                 >
-                  {doc.documentType}
+                  {doc.documentType || 'Тип не определён'}
                 </div>
 
                 <div
                   style={{
                     color: '#666',
                     fontSize: 13,
+                    marginBottom: 2,
                   }}
                 >
                   Дело №{' '}
@@ -267,6 +278,7 @@ export default function Home() {
                   style={{
                     color: '#faad14',
                     fontSize: 13,
+                    marginBottom: 2,
                   }}
                 >
                   Причина:{' '}
@@ -274,17 +286,25 @@ export default function Home() {
                     'Требуется проверка'}
                 </div>
 
-                <div
-                  style={{
-                    color: '#999',
-                    fontSize: 13,
-                  }}
-                >
-                  {doc.summary}
-                </div>
+                {doc.summary && (
+                  <div
+                    style={{
+                      color: '#999',
+                      fontSize: 13,
+                    }}
+                  >
+                    {doc.summary}
+                  </div>
+                )}
               </div>
 
-              <Button type="link">
+              <Button
+                type="link"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  navigate(`/documents/${doc.id}`)
+                }}
+              >
                 Проверить
               </Button>
             </div>

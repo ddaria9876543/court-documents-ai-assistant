@@ -40,6 +40,7 @@ class DocumentListResponse(BaseModel):
     summary: str = ""
     needsReview: bool = False
     reviewReason: str | None = None
+    dataVerified: bool = False
     files: list[DocumentFileResponse]
     debtor: str | None = None
     amount: float | None = None
@@ -77,3 +78,11 @@ class UploadResponse(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: DocumentStatus
+
+
+class DocumentUpdate(BaseModel):
+    documentType: str | None = None
+    caseNumber: str | None = None
+    enforcementNumber: str | None = None
+    debtor: str | None = None
+    amount: float | None = None

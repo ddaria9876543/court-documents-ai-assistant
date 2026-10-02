@@ -1,8 +1,18 @@
-import { Table, Input, Select, Space, Tag, DatePicker } from 'antd'
-import { useState } from 'react'
+import {
+  Table,
+  Input,
+  Select,
+  Space,
+  Tag,
+  DatePicker,
+  message,
+} from 'antd'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { mockDocuments } from '../mocks/documents'
+import type { Document } from '../types/document'
 import dayjs from 'dayjs'
+
+const BACKEND_URL = 'http://127.0.0.1:8000'
 
 const statusConfig: Record<string, { label: string; color: string }> = {
   processed: { label: 'Обработан', color: 'green' },
@@ -15,37 +25,86 @@ const statusConfig: Record<string, { label: string; color: string }> = {
 
 export default function Documents() {
   const navigate = useNavigate()
+
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [loading, setLoading] = useState(false)
+
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
   const [formatFilter, setFormatFilter] = useState<string | undefined>()
   const [dateFilter, setDateFilter] = useState<string | undefined>()
 
-  const filtered = mockDocuments.filter((d) => {
+  const loadDocuments = async () => {
+    setLoading(true)
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/documents`)
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const data: Document[] = await response.json()
+      setDocuments(data)
+    } catch (error) {
+      console.error('Ошибка загрузки документов:', error)
+      message.error('Не удалось получить документы с backend')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadDocuments()
+  }, [])
+
+  const filtered = documents.filter((d) => {
     const matchSearch =
       d.filename.toLowerCase().includes(search.toLowerCase()) ||
       (d.caseNumber || '').toLowerCase().includes(search.toLowerCase()) ||
       (d.enforcementNumber || '').toLowerCase().includes(search.toLowerCase())
 
-    const matchStatus = !statusFilter || d.status === statusFilter
-    const matchType = !typeFilter || d.documentType === typeFilter
-    const matchFormat = !formatFilter || d.fileFormat === formatFilter
-    const matchDate = !dateFilter || d.createdAt.startsWith(dateFilter)
+    const matchStatus =
+      !statusFilter || d.status === statusFilter
 
-    return matchSearch && matchStatus && matchType && matchFormat && matchDate
+    const matchType =
+      !typeFilter || d.documentType === typeFilter
+
+    const matchFormat =
+      !formatFilter || d.fileFormat === formatFilter
+
+    const matchDate =
+      !dateFilter || d.createdAt.startsWith(dateFilter)
+
+    return (
+      matchSearch &&
+      matchStatus &&
+      matchType &&
+      matchFormat &&
+      matchDate
+    )
   })
 
-  const types = Array.from(new Set(mockDocuments.map((d) => d.documentType)))
+  const types = Array.from(
+    new Set(
+      documents
+        .map((d) => d.documentType)
+        .filter(Boolean)
+    )
+  )
 
   const columns = [
     {
       title: 'Дата',
       dataIndex: 'createdAt',
       width: 160,
-      sorter: (a: any, b: any) =>
-        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      sorter: (a: Document, b: Document) =>
+        new Date(a.createdAt).getTime() -
+        new Date(b.createdAt).getTime(),
       defaultSortOrder: 'descend' as const,
-      render: (v: string) => new Date(v).toLocaleString('ru-RU'),
+      render: (value: string) =>
+        new Date(value).toLocaleString('ru-RU'),
     },
     {
       title: 'Файл',
@@ -54,14 +113,18 @@ export default function Documents() {
     {
       title: 'Тип',
       dataIndex: 'documentType',
-      sorter: (a: any, b: any) =>
-        a.documentType.localeCompare(b.documentType),
+      sorter: (a: Document, b: Document) =>
+        (a.documentType || '').localeCompare(
+          b.documentType || ''
+        ),
     },
     {
       title: '№ дела / ИП',
       key: 'num',
-      render: (_: any, r: any) =>
-        r.caseNumber || r.enforcementNumber || '—',
+      render: (_: unknown, record: Document) =>
+        record.caseNumber ||
+        record.enforcementNumber ||
+        '—',
     },
     {
       title: 'Результат',
@@ -71,10 +134,14 @@ export default function Documents() {
     {
       title: 'Статус',
       dataIndex: 'status',
-      sorter: (a: any, b: any) =>
+      sorter: (a: Document, b: Document) =>
         a.status.localeCompare(b.status),
-      render: (s: string) => {
-        const cfg = statusConfig[s]
+      render: (status: string) => {
+        const cfg =
+          statusConfig[status] ?? {
+            label: status,
+            color: 'default',
+          }
 
         return (
           <Tag color={cfg.color}>
@@ -95,7 +162,11 @@ export default function Documents() {
           allowClear
           style={{ width: 300 }}
           onSearch={setSearch}
-          onChange={(e) => !e.target.value && setSearch('')}
+          onChange={(e) => {
+            if (!e.target.value) {
+              setSearch('')
+            }
+          }}
         />
 
         <Select
@@ -118,9 +189,9 @@ export default function Documents() {
           placeholder="Тип документа"
           style={{ width: 200 }}
           onChange={setTypeFilter}
-          options={types.map((t) => ({
-            value: t,
-            label: t,
+          options={types.map((type) => ({
+            value: type,
+            label: type,
           }))}
         />
 
@@ -152,9 +223,13 @@ export default function Documents() {
         rowKey="id"
         columns={columns}
         dataSource={filtered}
-        onRow={(r) => ({
-          onClick: () => navigate(`/documents/${r.id}`),
-          style: { cursor: 'pointer' },
+        loading={loading}
+        onRow={(record) => ({
+          onClick: () =>
+            navigate(`/documents/${record.id}`),
+          style: {
+            cursor: 'pointer',
+          },
         })}
       />
     </div>

@@ -6,6 +6,38 @@ from app.models.document_file import DocumentFile
 from app.models.document_history import DocumentHistory
 
 
+WARNING_LABELS = {
+    "invalid_inn": "Некорректный ИНН",
+    "invalid_state_duty": "Не удалось корректно определить госпошлину",
+    "missing_case_number": "Не удалось определить номер дела",
+    "missing_document_type": "Не удалось определить тип документа",
+    "missing_debtor": "Не удалось определить должника",
+    "missing_amount": "Не удалось определить сумму задолженности",
+    "multiple_debtors": "Обнаружено несколько должников",
+    "ambiguous_debtor": "Не удалось однозначно определить должника",
+    "invalid_snils": "Некорректный СНИЛС",
+    "invalid_date": "Некорректная дата",
+    "invalid_amount": "Некорректная сумма",
+}
+
+
+def format_review_reason(warnings: list[str]) -> str | None:
+    if not warnings:
+        return None
+
+    readable_warnings = []
+
+    for warning in warnings:
+        readable_warnings.append(
+            WARNING_LABELS.get(
+                warning,
+                f"Требуется дополнительная проверка: {warning}"
+            )
+        )
+
+    return "; ".join(readable_warnings)
+
+
 def find_duplicate(
     db: Session,
     file_hash: str
@@ -68,6 +100,8 @@ def create_document(
     db.refresh(document)
 
     return document
+
+
 def apply_processing_result(
     db: Session,
     document: Document,
@@ -78,7 +112,10 @@ def apply_processing_result(
     в запись документа.
     """
 
-    fields = result.get("fields", {})
+    fields = result.get(
+        "fields",
+        {},
+    )
 
     case_number_field = fields.get(
         "case_number",
@@ -119,10 +156,8 @@ def apply_processing_result(
         [],
     )
 
-    document.review_reason = (
-        "; ".join(warnings)
-        if warnings
-        else None
+    document.review_reason = format_review_reason(
+        warnings
     )
 
     document.extracted_data = result
