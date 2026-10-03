@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from src.lawyer_filter import analyze_lawyer_markers
+
 
 LEGAL_ACTION_PATTERNS = {
     "Отказ в возбуждении исполнительного производства": [
@@ -42,6 +44,7 @@ FULL_RECOVERY_PATTERNS = [
     r"задолженность\s+погашен\w*\s+в\s+полн\w*\s+объ[её]м",
 ]
 
+
 ENDING_PROCEEDING_PATTERNS = [
     r"окончить\s+исполнительн\w*\s+производств",
     r"исполнительн\w*\s+производств\w*\s+окончено",
@@ -77,7 +80,12 @@ def _search_patterns(
     patterns: list[str],
 ) -> Optional[re.Match]:
     for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
+        match = re.search(
+            pattern,
+            text,
+            flags=re.IGNORECASE,
+        )
+
         if match:
             return match
 
@@ -90,6 +98,11 @@ def classify_legal_action(
 ) -> dict:
     """
     Определяет, требует ли документ действий юриста.
+
+    Приоритет:
+    1. Официальные 10 фраз-маркеров организаторов.
+    2. Дополнительные правила по судебным и исполнительным документам.
+    3. Отдельная обработка окончания исполнительного производства.
 
     Возвращает:
     {
@@ -106,62 +119,150 @@ def classify_legal_action(
             "evidence_fragment": None,
         }
 
-    clean_text = _clean_text(text)
+    # ============================================================
+    # 1. ОФИЦИАЛЬНЫЕ МАРКЕРЫ ОРГАНИЗАТОРОВ
+    # ============================================================
 
-    # 1. Сначала проверяем явные основания для передачи юристу
-    for reason, patterns in LEGAL_ACTION_PATTERNS.items():
-        match = _search_patterns(clean_text, patterns)
+    official_marker_result = analyze_lawyer_markers(
+        text
+    )
+
+    if official_marker_result[
+        "requires_lawyer"
+    ]:
+        matches = official_marker_result.get(
+            "matches",
+            [],
+        )
+
+        matched_markers = (
+            official_marker_result.get(
+                "matched_markers",
+                [],
+            )
+        )
+
+        first_match = (
+            matches[0]
+            if matches
+            else None
+        )
+
+        evidence_fragment = (
+            first_match.get("fragment")
+            if first_match
+            else None
+        )
+
+        if len(matched_markers) == 1:
+            legal_action_reason = (
+                "Обнаружен официальный маркер "
+                "для передачи юристу: "
+                f"{matched_markers[0]}"
+            )
+
+        else:
+            legal_action_reason = (
+                "Обнаружены официальные маркеры "
+                "для передачи юристу: "
+                + "; ".join(
+                    matched_markers
+                )
+            )
+
+        return {
+            "requires_legal_action": True,
+            "legal_action_reason":
+                legal_action_reason,
+            "evidence_fragment":
+                evidence_fragment,
+        }
+
+    # ============================================================
+    # 2. ДОПОЛНИТЕЛЬНЫЕ ПРАВИЛА
+    # ============================================================
+
+    clean_text = _clean_text(
+        text
+    )
+
+    for reason, patterns in (
+        LEGAL_ACTION_PATTERNS.items()
+    ):
+        match = _search_patterns(
+            clean_text,
+            patterns,
+        )
 
         if match:
             return {
                 "requires_legal_action": True,
-                "legal_action_reason": reason,
-                "evidence_fragment": _find_fragment(
-                    clean_text,
-                    match.start(),
-                    match.end(),
-                ),
+                "legal_action_reason":
+                    reason,
+                "evidence_fragment":
+                    _find_fragment(
+                        clean_text,
+                        match.start(),
+                        match.end(),
+                    ),
             }
 
-    # 2. Отдельно обрабатываем окончание исполнительного производства
+    # ============================================================
+    # 3. ОКОНЧАНИЕ ИСПОЛНИТЕЛЬНОГО ПРОИЗВОДСТВА
+    # ============================================================
+
     ending_match = _search_patterns(
         clean_text,
         ENDING_PROCEEDING_PATTERNS,
     )
 
     if ending_match:
-        full_recovery_match = _search_patterns(
-            clean_text,
-            FULL_RECOVERY_PATTERNS,
+        full_recovery_match = (
+            _search_patterns(
+                clean_text,
+                FULL_RECOVERY_PATTERNS,
+            )
         )
 
-        # Производство окончено после полного взыскания:
-        # дополнительная работа юриста не требуется
+        # Если производство окончено после полного взыскания,
+        # дополнительная работа юриста не требуется.
         if full_recovery_match:
             return {
-                "requires_legal_action": False,
-                "legal_action_reason": None,
-                "evidence_fragment": _find_fragment(
-                    clean_text,
-                    full_recovery_match.start(),
-                    full_recovery_match.end(),
-                ),
+                "requires_legal_action":
+                    False,
+                "legal_action_reason":
+                    None,
+                "evidence_fragment":
+                    _find_fragment(
+                        clean_text,
+                        full_recovery_match.start(),
+                        full_recovery_match.end(),
+                    ),
             }
 
+        # Если производство окончено,
+        # но полного взыскания не видно,
+        # документ отправляем юристу.
         return {
-            "requires_legal_action": True,
+            "requires_legal_action":
+                True,
             "legal_action_reason": (
-                "Окончание исполнительного производства "
-                "без подтверждения полного взыскания"
+                "Окончание исполнительного "
+                "производства без подтверждения "
+                "полного взыскания"
             ),
-            "evidence_fragment": _find_fragment(
-                clean_text,
-                ending_match.start(),
-                ending_match.end(),
-            ),
+            "evidence_fragment":
+                _find_fragment(
+                    clean_text,
+                    ending_match.start(),
+                    ending_match.end(),
+                ),
         }
 
-    # 3. Явных оснований не нашли
+    # ============================================================
+    # 4. ОСНОВАНИЙ ДЛЯ ПЕРЕДАЧИ ЮРИСТУ НЕ НАЙДЕНО
+    # ============================================================
+
     return {
         "requires_legal_action": False,
         "legal_action_reason": None,

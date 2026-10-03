@@ -468,10 +468,54 @@ def extract_debtors(
     document: ParsedDocument,
 ) -> DebtorsExtraction:
     """
-    Извлекает всех должников.
+    Извлекает должников из ограниченного контекста документа.
+
+    Весь текст документа в Qwen не отправляем:
+    для длинных документов берём начало и конец,
+    где чаще всего находятся стороны и резолютивная часть.
+
+    Если первый ответ Qwen получился некорректным,
+    выполняется повторная попытка на ещё меньшем контексте.
     """
 
-    prompt = f"""
+    full_text = document.full_text or ""
+
+    # ------------------------------------------------------------
+    # Ограничиваем контекст.
+    # Qwen3:4b работает с небольшим num_ctx, поэтому отправлять
+    # 20-30 тысяч символов здесь нельзя.
+    # ------------------------------------------------------------
+
+    max_context_chars = 6000
+
+    if len(full_text) <= max_context_chars:
+        debtor_context = full_text
+
+    else:
+        # Начало документа:
+        # стороны, реквизиты, сведения о должнике.
+        head_size = 4000
+
+        # Конец документа:
+        # резолютивная часть и итоговые сведения.
+        tail_size = 2000
+
+        debtor_context = (
+            full_text[:head_size]
+            + "\n\n...[середина документа пропущена]...\n\n"
+            + full_text[-tail_size:]
+        )
+
+    print(
+        f"  Debtors context: "
+        f"{len(full_text)} -> "
+        f"{len(debtor_context)} символов"
+    )
+
+    def build_prompt(
+        context: str,
+    ) -> str:
+        return f"""
 Извлеки ВСЕХ должников из российского судебного документа.
 
 Для каждого должника извлеки:
@@ -496,21 +540,84 @@ def extract_debtors(
 - если принадлежность реквизита конкретному должнику
   неоднозначна, верни null;
 - если значение отсутствует, верни null;
-- ничего не придумывай.
+- ничего не придумывай;
+- не создавай должников только из-за упоминания
+  посторонних лиц в описательной части документа.
 
 Текст:
-{document.full_text}
+{context}
 """
 
-    result = call_ollama_json(
-        prompt=prompt,
-        response_model=DebtorsExtraction,
-        pass_name="debtors",
-        num_predict=1200,
+    # ------------------------------------------------------------
+    # Первая попытка
+    # ------------------------------------------------------------
+
+    prompt = build_prompt(
+        debtor_context
     )
 
-    return result
+    try:
+        result = call_ollama_json(
+            prompt=prompt,
+            response_model=DebtorsExtraction,
+            pass_name="debtors",
+            num_predict=700,
+        )
 
+        return result
+
+    except ValueError as exc:
+        print(
+            "  Qwen [debtors]: некорректный JSON, "
+            "повторная попытка..."
+        )
+
+        # --------------------------------------------------------
+        # Fallback:
+        # ещё сильнее уменьшаем контекст.
+        # --------------------------------------------------------
+
+        retry_context_chars = 3500
+
+        if len(full_text) <= retry_context_chars:
+            retry_context = full_text
+
+        else:
+            retry_context = (
+                full_text[:2500]
+                + "\n\n...[часть документа пропущена]...\n\n"
+                + full_text[-1000:]
+            )
+
+        print(
+            f"  Debtors retry context: "
+            f"{len(full_text)} -> "
+            f"{len(retry_context)} символов"
+        )
+
+        retry_prompt = build_prompt(
+            retry_context
+        )
+
+        try:
+            return call_ollama_json(
+                prompt=retry_prompt,
+                response_model=DebtorsExtraction,
+                pass_name="debtors-retry",
+                num_predict=600,
+            )
+
+        except ValueError:
+            # Ошибка извлечения должников не должна
+            # ронять обработку всего документа.
+            print(
+                "  Qwen [debtors]: не удалось получить "
+                "корректный JSON. Продолжаем без должников."
+            )
+
+            return DebtorsExtraction(
+                debtors=[]
+            )
 
 # ============================================================
 # Нормализация
