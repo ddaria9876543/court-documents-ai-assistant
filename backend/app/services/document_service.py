@@ -32,6 +32,37 @@ TECHNICAL_REVIEW_STATUSES = {
 }
 
 
+def get_field_value(
+    fields: dict,
+    field_name: str,
+):
+    """
+    Возвращает обычное значение поля.
+
+    Поддерживает два формата:
+
+    1. Новый:
+    {
+        "document_type": "исполнительный лист"
+    }
+
+    2. Backend/API формат:
+    {
+        "document_type": {
+            "value": "исполнительный лист",
+            "status": "ok",
+        }
+    }
+    """
+
+    value = fields.get(field_name)
+
+    if isinstance(value, dict):
+        return value.get("value")
+
+    return value
+
+
 def format_review_reason(
     warnings: list[str],
     missing_fields: list[str] | None = None,
@@ -169,9 +200,14 @@ def apply_processing_result(
     #     ...
     # }
     #
-    # 2. Старый backend-формат:
+    # 2. Старый backend/API формат:
     # {
-    #     "fields": {...}
+    #     "fields": {
+    #         "document_type": {
+    #             "value": "...",
+    #             "status": "ok"
+    #         }
+    #     }
     # }
 
     fields = result.get(
@@ -185,39 +221,45 @@ def apply_processing_result(
 
     document.document_type = (
         result.get("document_type")
-        or fields.get("document_type")
+        or get_field_value(
+            fields,
+            "document_type",
+        )
     )
 
     case_number = (
         result.get("case_number")
-        or fields.get("case_number")
-    )
-
-    # Старый формат мог хранить:
-    # {"case_number": {"value": "..."}}
-    if isinstance(
-        case_number,
-        dict,
-    ):
-        case_number = case_number.get(
-            "value"
+        or get_field_value(
+            fields,
+            "case_number",
         )
+    )
 
     document.case_number = case_number
 
-    document.summary = result.get(
-        "summary"
+    document.summary = (
+        result.get("summary")
+        or ""
     )
 
     document.debtor = (
         result.get("debtor")
-        or fields.get("full_name")
-        or fields.get("co_defendants_names")
+        or get_field_value(
+            fields,
+            "full_name",
+        )
+        or get_field_value(
+            fields,
+            "co_defendants_names",
+        )
     )
 
     amount = (
         result.get("amount")
-        or fields.get("principal_debt")
+        or get_field_value(
+            fields,
+            "principal_debt",
+        )
     )
 
     try:
@@ -238,20 +280,30 @@ def apply_processing_result(
     # ========================================
 
     processing_status = (
-        result.get("status")
-        or fields.get("status")
+        result.get("extraction_status")
+        or result.get("status")
+        or get_field_value(
+            fields,
+            "status",
+        )
         or "ok"
     )
 
     warnings = (
         result.get("warnings")
-        or fields.get("warnings")
+        or get_field_value(
+            fields,
+            "warnings",
+        )
         or []
     )
 
     missing_fields = (
         result.get("missing_fields")
-        or fields.get("missing_fields")
+        or get_field_value(
+            fields,
+            "missing_fields",
+        )
         or []
     )
 
@@ -266,7 +318,6 @@ def apply_processing_result(
         document.status = "error"
 
     elif needs_review:
-        # UI использует единый статус needs_review
         document.status = "needs_review"
 
     else:
@@ -285,24 +336,42 @@ def apply_processing_result(
     # Юридическая маршрутизация
     # ========================================
 
-    document.requires_legal_action = bool(
+    requires_legal_action = (
         result.get(
-            "requires_legal_action",
-            fields.get(
-                "requires_legal_action",
-                False,
-            ),
+            "requires_legal_action"
         )
     )
 
+    if requires_legal_action is None:
+        requires_legal_action = (
+            get_field_value(
+                fields,
+                "requires_legal_action",
+            )
+        )
+
+    document.requires_legal_action = bool(
+        requires_legal_action
+    )
+
     document.legal_action_reason = (
-        result.get("legal_action_reason")
-        or fields.get("legal_action_reason")
+        result.get(
+            "legal_action_reason"
+        )
+        or get_field_value(
+            fields,
+            "legal_action_reason",
+        )
     )
 
     document.evidence_fragment = (
-        result.get("evidence_fragment")
-        or fields.get("evidence_fragment")
+        result.get(
+            "evidence_fragment"
+        )
+        or get_field_value(
+            fields,
+            "evidence_fragment",
+        )
     )
 
     # ========================================
@@ -331,10 +400,7 @@ def apply_processing_result(
 
     db.add(history)
 
-    # Если документ требует действий юриста,
-    # отдельно фиксируем это в истории.
     if document.requires_legal_action:
-
         legal_history = DocumentHistory(
             document_id=document.id,
             event_type="legal_action_required",
@@ -350,6 +416,8 @@ def apply_processing_result(
     db.refresh(document)
 
     return document
+
+
 def attach_file_to_document(
     db: Session,
     document: Document,

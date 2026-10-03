@@ -346,7 +346,7 @@ export default function DocumentDetail() {
   const sendToResponsible = async () => {
     await updateStatus(
       'sent',
-      'Документ отправлен ответственному'
+      'Письмо ответственному сформировано (демо)'
     )
   }
 
@@ -787,7 +787,7 @@ export default function DocumentDetail() {
                               actionLoading
                             }
                           >
-                            Отправить ответственному
+                            Сформировать письмо ответственному
                           </Button>
 
                           <Button
@@ -838,7 +838,7 @@ export default function DocumentDetail() {
                             actionLoading
                           }
                         >
-                          Отправить ответственному
+                          Сформировать письмо ответственному
                         </Button>
 
                         <Button
@@ -870,8 +870,8 @@ export default function DocumentDetail() {
                   <Alert
                     type="info"
                     showIcon
-                    message="Документ отправлен ответственному"
-                    description="В MVP отправка по e-mail имитируется сменой статуса."
+                    message="Письмо ответственному сформировано"
+                    description="Демо-режим: в MVP фактическая отправка e-mail не выполняется. Система имитирует отправку сменой статуса документа."
                     style={{
                       marginTop: 20,
                     }}

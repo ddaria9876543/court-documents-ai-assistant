@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from src.lawyer_filter import analyze_lawyer_markers
+try:
+    from .lawyer_filter import analyze_lawyer_markers
+except ImportError:
+    from lawyer_filter import analyze_lawyer_markers
 
 
 LEGAL_ACTION_PATTERNS = {
