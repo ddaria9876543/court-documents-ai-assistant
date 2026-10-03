@@ -1,6 +1,8 @@
 from pathlib import Path
+import os
+import smtplib
 import sys
-
+from app.core.config import settings
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
@@ -39,6 +41,9 @@ from app.services.file_service import (
     validate_file_extension,
 )
 
+from app.services.email_service import (
+    send_document_email,
+)
 
 DOCUMENT_PROCESSING_SRC = (
     Path(__file__).resolve().parents[3]
@@ -939,7 +944,421 @@ def update_document_data(
 
     return response
 
+# ============================================================
+# ОТПРАВКА ДОКУМЕНТА ОТВЕТСТВЕННОМУ ПО E-MAIL
+# ============================================================
 
+
+@router.post(
+    "/{document_id}/send-email"
+)
+def send_document_to_responsible(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Отправляет документ ответственному сотруднику
+    по электронной почте.
+
+    Статус документа меняется на sent
+    только после успешной SMTP-отправки.
+    """
+
+    document = db.scalar(
+        select(Document)
+        .options(
+            selectinload(
+                Document.files
+            ),
+            selectinload(
+                Document.history
+            ),
+        )
+        .where(
+            Document.id
+            == document_id
+        )
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    # Отправлять можно только документы,
+    # которые система отметила как требующие
+    # дополнительной работы юриста.
+    if not document.requires_legal_action:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Document does not require "
+                "legal action"
+            ),
+        )
+
+    extracted_data = (
+        document.extracted_data or {}
+    )
+
+    # Перед отправкой данные должны быть
+    # подтверждены сотрудником.
+    if not extracted_data.get(
+        "dataVerified",
+        False,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Document data must be "
+                "verified before sending"
+            ),
+        )
+
+    # Берём PDF, если он есть.
+    display_file = get_display_file(
+        document
+    )
+
+    if display_file is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Document file not found"
+            ),
+        )
+
+    file_path = Path(
+        display_file.file_path
+    )
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Document file not found "
+                "on disk"
+            ),
+        )
+
+    recipient = (
+        settings.SMTP_RECIPIENT
+    )
+
+    if not recipient:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "SMTP_RECIPIENT is not "
+                "configured"
+            ),
+        )
+
+    original_filename = (
+        display_file.original_filename
+        or display_file.filename
+    )
+
+    # ========================================================
+    # НОРМАЛИЗАЦИЯ НОМЕРА ДЕЛА
+    # ========================================================
+
+    raw_case_number = (
+        document.case_number.strip()
+        if document.case_number
+        else ""
+    )
+
+    case_number = raw_case_number
+
+    # Убираем служебные префиксы, чтобы не получилось:
+    # "дело Дело № А56-..."
+    lower_case_number = (
+        case_number.lower()
+    )
+
+    prefixes = (
+        "дело №",
+        "дело n",
+        "дело no",
+        "дело:",
+        "дело ",
+        "№",
+    )
+
+    for prefix in prefixes:
+        if lower_case_number.startswith(
+            prefix
+        ):
+            case_number = (
+                case_number[
+                    len(prefix):
+                ].strip()
+            )
+            break
+
+    # Значения, которые не являются
+    # реальным номером дела.
+    invalid_case_values = {
+        "",
+        "дело",
+        "номер дела",
+        "номер",
+        "n",
+        "no",
+        "-",
+        "—",
+        "не определено",
+        "не найдено",
+        "null",
+        "none",
+    }
+
+    case_number_is_valid = (
+        case_number.lower()
+        not in invalid_case_values
+        and len(case_number) >= 3
+        and any(
+            char.isdigit()
+            for char in case_number
+        )
+    )
+
+    # ========================================================
+    # ТЕМА ПИСЬМА
+    # ========================================================
+
+    subject = (
+        "Судебный акт требует работы юриста"
+    )
+
+    if case_number_is_valid:
+        subject += (
+            f" — дело {case_number}"
+        )
+
+    # ========================================================
+    # ТЕЛО ПИСЬМА
+    # ========================================================
+
+    body_lines = [
+        (
+            "Автоматическая система анализа "
+            "судебных документов определила, "
+            "что документ требует "
+            "дополнительной работы юриста."
+        ),
+        "",
+        (
+            f"Документ: "
+            f"{original_filename}"
+        ),
+    ]
+
+    # --------------------------------------------------------
+    # Тип документа
+    #
+    # В письмо выводим только три типа,
+    # которые предусмотрены задачей хакатона.
+    # --------------------------------------------------------
+
+    allowed_document_types = {
+        "судебный приказ",
+        "исполнительный лист",
+        "постановление фссп",
+    }
+
+    document_type = (
+        document.document_type.strip()
+        if document.document_type
+        else ""
+    )
+
+    normalized_document_type = (
+        document_type.lower()
+    )
+
+    if (
+        normalized_document_type
+        in allowed_document_types
+    ):
+        body_lines.append(
+            f"Тип документа: "
+            f"{document_type}"
+        )
+
+    # --------------------------------------------------------
+    # Номер дела
+    # --------------------------------------------------------
+
+    if case_number_is_valid:
+        body_lines.append(
+            f"Номер дела: "
+            f"{case_number}"
+        )
+
+    # --------------------------------------------------------
+    # Должник
+    # --------------------------------------------------------
+
+    if document.debtor:
+        debtor = (
+            document.debtor.strip()
+        )
+
+        invalid_debtor_values = {
+            "",
+            "-",
+            "—",
+            "не определено",
+            "не найдено",
+            "null",
+            "none",
+        }
+
+        if (
+            debtor.lower()
+            not in invalid_debtor_values
+        ):
+            body_lines.append(
+                f"Должник: {debtor}"
+            )
+
+    # --------------------------------------------------------
+    # Сумма
+    # --------------------------------------------------------
+
+    if (
+        document.amount is not None
+        and document.amount >= 0
+    ):
+        body_lines.append(
+            f"Сумма: "
+            f"{document.amount:.2f} руб."
+        )
+
+    # --------------------------------------------------------
+    # Причина передачи юристу
+    # --------------------------------------------------------
+
+    if document.legal_action_reason:
+        body_lines.extend(
+            [
+                "",
+                "Причина передачи юристу:",
+                document.legal_action_reason,
+            ]
+        )
+
+    # --------------------------------------------------------
+    # Подтверждающий фрагмент
+    # --------------------------------------------------------
+
+    if document.evidence_fragment:
+        evidence = (
+            document.evidence_fragment
+            .strip()
+        )
+
+        if evidence:
+            body_lines.extend(
+                [
+                    "",
+                    "Фрагмент документа:",
+                    evidence,
+                ]
+            )
+
+    body_lines.extend(
+        [
+            "",
+            (
+                "Оригинал документа "
+                "прикреплён к письму."
+            ),
+            "",
+            (
+                "Сообщение сформировано "
+                "автоматически."
+            ),
+        ]
+    )
+
+    body = "\n".join(
+        body_lines
+    )
+
+    # ========================================================
+    # SMTP-ОТПРАВКА
+    # ========================================================
+
+    try:
+        send_document_email(
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            attachment_path=file_path,
+            attachment_name=(
+                original_filename
+            ),
+        )
+
+    except (
+        ValueError,
+        FileNotFoundError,
+        OSError,
+        smtplib.SMTPException,
+    ) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Email sending failed: "
+                f"{exc}"
+            ),
+        ) from exc
+
+    # ========================================================
+    # СТАТУС МЕНЯЕМ ТОЛЬКО ПОСЛЕ УСПЕШНОГО SMTP
+    # ========================================================
+
+    old_status = (
+        document.status
+    )
+
+    document.status = "sent"
+    document.needs_review = False
+    document.review_reason = None
+
+    history = DocumentHistory(
+        document_id=document.id,
+        event_type="email_sent",
+        message=(
+            "Document sent by email to "
+            f"{recipient}. "
+            f"Status changed from "
+            f"{old_status} to sent"
+        ),
+    )
+
+    db.add(history)
+
+    db.commit()
+    db.refresh(document)
+
+    return {
+        "success": True,
+        "document_id":
+            document.id,
+        "status":
+            document.status,
+        "recipient":
+            recipient,
+        "message": (
+            "Document successfully sent "
+            "by email"
+        ),
+    }
 # ============================================================
 # ИЗМЕНЕНИЕ СТАТУСА
 # ============================================================

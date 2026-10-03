@@ -128,43 +128,43 @@ export default function DocumentDetail() {
     setActionLoading,
   ] = useState(false)
 
-  useEffect(() => {
+  const loadDocument = async () => {
     if (!id) {
       setError('Не указан ID документа')
       setLoading(false)
       return
     }
 
-    const loadDocument = async () => {
-      try {
-        setLoading(true)
-        setError(null)
+    try {
+      setLoading(true)
+      setError(null)
 
-        const response = await fetch(
-          `${BACKEND_URL}/documents/${id}`
+      const response = await fetch(
+        `${BACKEND_URL}/documents/${id}`
+      )
+
+      if (!response.ok) {
+        throw new Error(
+          `Ошибка загрузки: ${response.status}`
         )
-
-        if (!response.ok) {
-          throw new Error(
-            `Ошибка загрузки: ${response.status}`
-          )
-        }
-
-        const data: DocumentData =
-          await response.json()
-
-        setDoc(data)
-      } catch (err) {
-        console.error(err)
-
-        setError(
-          'Не удалось загрузить документ'
-        )
-      } finally {
-        setLoading(false)
       }
-    }
 
+      const data: DocumentData =
+        await response.json()
+
+      setDoc(data)
+    } catch (err) {
+      console.error(err)
+
+      setError(
+        'Не удалось загрузить документ'
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
     loadDocument()
   }, [id])
 
@@ -344,10 +344,57 @@ export default function DocumentDetail() {
     }
 
   const sendToResponsible = async () => {
-    await updateStatus(
-      'sent',
-      'Письмо ответственному сформировано (демо)'
-    )
+    if (!doc) {
+      return
+    }
+
+    try {
+      setActionLoading(true)
+
+      const response = await fetch(
+        `${BACKEND_URL}/documents/${doc.id}/send-email`,
+        {
+          method: 'POST',
+        }
+      )
+
+      if (!response.ok) {
+        let errorMessage =
+          'Не удалось отправить письмо'
+
+        try {
+          const errorData =
+            await response.json()
+
+          if (errorData.detail) {
+            errorMessage =
+              errorData.detail
+          }
+        } catch {
+          // Если backend вернул не JSON,
+          // оставляем стандартное сообщение.
+        }
+
+        throw new Error(errorMessage)
+      }
+
+      message.success(
+        'Документ отправлен ответственному по e-mail'
+      )
+
+      await loadDocument()
+    } catch (error) {
+      console.error(error)
+
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'Ошибка отправки письма'
+
+      message.error(errorMessage)
+    } finally {
+      setActionLoading(false)
+    }
   }
 
   if (loading) {
@@ -770,6 +817,17 @@ export default function DocumentDetail() {
                           <Button
                             type="primary"
                             onClick={
+                              sendToResponsible
+                            }
+                            loading={
+                              actionLoading
+                            }
+                          >
+                            Отправить ответственному
+                          </Button>
+
+                          <Button
+                            onClick={
                               markNoSendingRequired
                             }
                             loading={
@@ -777,17 +835,6 @@ export default function DocumentDetail() {
                             }
                           >
                             Не требует отправки
-                          </Button>
-
-                          <Button
-                            onClick={
-                              sendToResponsible
-                            }
-                            loading={
-                              actionLoading
-                            }
-                          >
-                            Сформировать письмо ответственному
                           </Button>
 
                           <Button
@@ -838,7 +885,7 @@ export default function DocumentDetail() {
                             actionLoading
                           }
                         >
-                          Сформировать письмо ответственному
+                          Отправить ответственному
                         </Button>
 
                         <Button
@@ -868,10 +915,10 @@ export default function DocumentDetail() {
 
                 {doc.status === 'sent' && (
                   <Alert
-                    type="info"
+                    type="success"
                     showIcon
-                    message="Письмо ответственному сформировано"
-                    description="Демо-режим: в MVP фактическая отправка e-mail не выполняется. Система имитирует отправку сменой статуса документа."
+                    message="Документ отправлен ответственному по e-mail"
+                    description="Письмо с документом успешно отправлено через почтовый сервер."
                     style={{
                       marginTop: 20,
                     }}
