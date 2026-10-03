@@ -65,7 +65,8 @@ class ParsedDocument(BaseModel):
 
 class OfficialExtractedFields(BaseModel):
     # Тип документа:
-    # судебный приказ / исполнительный лист / постановление ФССП
+    # судебный приказ / исполнительный лист /
+    # постановление ФССП
     document_type: Optional[str] = None
 
     # Данные основного должника
@@ -88,6 +89,9 @@ class OfficialExtractedFields(BaseModel):
     case_number: Optional[str] = None
     case_date: Optional[str] = None
 
+    # Номер исполнительного производства ФССП
+    enforcement_number: Optional[str] = None
+
     # Период задолженности
     debt_period_start: Optional[str] = None
     debt_period_end: Optional[str] = None
@@ -96,6 +100,9 @@ class OfficialExtractedFields(BaseModel):
     principal_debt: Optional[str] = None
     penalty_amount: Optional[str] = None
     state_duty: Optional[str] = None
+
+    # Почтовые расходы
+    postal_cost: Optional[str] = None
 
     # Соответчики
     co_defendants_count: Optional[int] = None
@@ -111,21 +118,15 @@ class OfficialExtractedFields(BaseModel):
         default_factory=list
     )
 
-    # Общий технический статус результата:
-    # ok / unclear / error и т.п.
+    # Общий технический статус результата
     status: str = "ok"
 
     # ========================================
     # Юридическая маршрутизация
     # ========================================
 
-    # Требует ли содержание акта действий юриста.
-    # Это НЕ то же самое, что техническая ручная проверка.
     requires_legal_action: bool = False
 
-    # Почему документ передаётся юристу.
     legal_action_reason: Optional[str] = None
 
-    # Фрагмент документа,
-    # подтверждающий причину передачи.
     evidence_fragment: Optional[str] = None

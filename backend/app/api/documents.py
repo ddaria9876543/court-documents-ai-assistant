@@ -2,6 +2,11 @@ from pathlib import Path
 import os
 import smtplib
 import sys
+import csv
+from io import BytesIO, StringIO
+
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from app.core.config import settings
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi import HTTPException
@@ -665,7 +670,277 @@ def get_documents(
         for document in documents
     ]
 
+# ============================================================
+# ЭКСПОРТ ДОКУМЕНТОВ В XLSX / CSV
+# ============================================================
 
+
+EXPORT_COLUMNS = [
+    ("id", "ID"),
+    ("filename", "Файл"),
+    ("document_type", "Тип документа"),
+    ("case_number", "Номер дела"),
+    ("enforcement_number", "Номер ИП"),
+    ("status", "Статус"),
+    ("debtor", "Должник"),
+    ("amount", "Сумма"),
+    ("requires_legal_action", "Требует работы юриста"),
+    ("legal_action_reason", "Причина передачи юристу"),
+    ("created_at", "Дата загрузки"),
+]
+
+
+def build_export_row(
+    document: Document,
+) -> dict:
+    display_file = get_display_file(
+        document
+    )
+
+    extracted_data = (
+        document.extracted_data or {}
+    )
+
+    return {
+        "id": document.id,
+
+        "filename": (
+            display_file.original_filename
+            if display_file
+            else ""
+        ),
+
+        "document_type":
+            document.document_type or "",
+
+        "case_number":
+            document.case_number or "",
+
+        "enforcement_number":
+            extracted_data.get(
+                "enforcementNumber"
+            )
+            or extracted_data.get(
+                "enforcement_number"
+            )
+            or "",
+
+        "status":
+            document.status or "",
+
+        "debtor":
+            document.debtor or "",
+
+        "amount": (
+            document.amount
+            if document.amount is not None
+            else ""
+        ),
+
+        "requires_legal_action": (
+            "Да"
+            if document.requires_legal_action
+            else "Нет"
+        ),
+
+        "legal_action_reason":
+            document.legal_action_reason or "",
+
+        "created_at": (
+            document.created_at.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            if document.created_at
+            else ""
+        ),
+    }
+
+
+@router.get("/exports/download")
+def export_documents(
+    format: str = "xlsx",
+    db: Session = Depends(get_db),
+):
+    """
+    Формирует выгрузку всех документов
+    в XLSX или CSV.
+    """
+
+    export_format = (
+        format.strip().lower()
+    )
+
+    if export_format not in {
+        "xlsx",
+        "csv",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Supported formats: "
+                "xlsx, csv"
+            ),
+        )
+
+    documents = db.scalars(
+        select(Document)
+        .options(
+            selectinload(
+                Document.files
+            )
+        )
+        .order_by(
+            Document.created_at.desc()
+        )
+    ).all()
+
+    rows = [
+        build_export_row(document)
+        for document in documents
+    ]
+
+    # ========================================================
+    # CSV
+    # ========================================================
+
+    if export_format == "csv":
+
+        output = StringIO()
+
+        writer = csv.writer(
+            output,
+            delimiter=";",
+            lineterminator="\n",
+        )
+
+        writer.writerow(
+            [
+                title
+                for _, title
+                in EXPORT_COLUMNS
+            ]
+        )
+
+        for row in rows:
+
+            writer.writerow(
+                [
+                    row.get(key, "")
+                    for key, _
+                    in EXPORT_COLUMNS
+                ]
+            )
+
+        # BOM нужен,
+        # чтобы Excel нормально открыл кириллицу.
+        content = (
+            "\ufeff"
+            + output.getvalue()
+        )
+
+        return StreamingResponse(
+            iter(
+                [
+                    content.encode(
+                        "utf-8"
+                    )
+                ]
+            ),
+            media_type=(
+                "text/csv; "
+                "charset=utf-8"
+            ),
+            headers={
+                "Content-Disposition":
+                    (
+                        'attachment; '
+                        'filename="documents.csv"'
+                    )
+            },
+        )
+
+    # ========================================================
+    # XLSX
+    # ========================================================
+
+    workbook = Workbook()
+
+    worksheet = workbook.active
+
+    worksheet.title = "Документы"
+
+    worksheet.append(
+        [
+            title
+            for _, title
+            in EXPORT_COLUMNS
+        ]
+    )
+
+    for row in rows:
+
+        worksheet.append(
+            [
+                row.get(key, "")
+                for key, _
+                in EXPORT_COLUMNS
+            ]
+        )
+
+    # Немного приводим таблицу
+    # к нормальному виду.
+
+    worksheet.freeze_panes = "A2"
+
+    worksheet.auto_filter.ref = (
+        worksheet.dimensions
+    )
+
+    column_widths = {
+        "A": 8,
+        "B": 30,
+        "C": 24,
+        "D": 22,
+        "E": 22,
+        "F": 16,
+        "G": 32,
+        "H": 16,
+        "I": 24,
+        "J": 45,
+        "K": 22,
+    }
+
+    for column, width in (
+        column_widths.items()
+    ):
+        worksheet.column_dimensions[
+            column
+        ].width = width
+
+    output = BytesIO()
+
+    workbook.save(
+        output
+    )
+
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type=(
+            "application/"
+            "vnd.openxmlformats-"
+            "officedocument."
+            "spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition":
+                (
+                    'attachment; '
+                    'filename="documents.xlsx"'
+                )
+        },
+    )
 # ============================================================
 # КАРТОЧКА ДОКУМЕНТА
 # ============================================================

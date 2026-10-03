@@ -61,12 +61,22 @@ class DebtorCandidate(BaseModel):
 
 class DebtorsExtraction(BaseModel):
     """
-    Список всех найденных должников.
+    Список всех найденных должников
+    и индекс основного должника.
     """
 
     debtors: list[DebtorCandidate] = Field(
         default_factory=list
     )
+
+    # Индекс основного должника в debtors.
+    # Например:
+    # 0 — первый,
+    # 1 — второй.
+    #
+    # Если определить основного должника
+    # по тексту нельзя — null.
+    primary_debtor_index: Optional[int] = None
 
 
 # ============================================================
@@ -118,6 +128,7 @@ def call_ollama_json(
         "keep_alive": "10m",
         "options": {
             "temperature": 0,
+            "seed": 42,
             "num_ctx": 2048,
             "num_predict": num_predict,
         },
@@ -470,21 +481,18 @@ def extract_debtors(
     """
     Извлекает должников из ограниченного контекста документа.
 
-    Весь текст документа в Qwen не отправляем:
-    для длинных документов берём начало и конец,
-    где чаще всего находятся стороны и резолютивная часть.
+    Для длинных документов используем начало и конец,
+    чтобы не перегружать Qwen.
 
-    Если первый ответ Qwen получился некорректным,
-    выполняется повторная попытка на ещё меньшем контексте.
+    Дополнительно модель определяет индекс
+    основного должника.
     """
 
     full_text = document.full_text or ""
 
-    # ------------------------------------------------------------
-    # Ограничиваем контекст.
-    # Qwen3:4b работает с небольшим num_ctx, поэтому отправлять
-    # 20-30 тысяч символов здесь нельзя.
-    # ------------------------------------------------------------
+    # ========================================================
+    # Ограничиваем контекст
+    # ========================================================
 
     max_context_chars = 6000
 
@@ -492,12 +500,7 @@ def extract_debtors(
         debtor_context = full_text
 
     else:
-        # Начало документа:
-        # стороны, реквизиты, сведения о должнике.
         head_size = 4000
-
-        # Конец документа:
-        # резолютивная часть и итоговые сведения.
         tail_size = 2000
 
         debtor_context = (
@@ -511,6 +514,10 @@ def extract_debtors(
         f"{len(full_text)} -> "
         f"{len(debtor_context)} символов"
     )
+
+    # ========================================================
+    # Prompt
+    # ========================================================
 
     def build_prompt(
         context: str,
@@ -528,11 +535,36 @@ def extract_debtors(
 - snils
 - inn
 
+Дополнительно определи:
+- primary_debtor_index — индекс ОСНОВНОГО должника
+  в массиве debtors, начиная с 0.
+
+Основной должник — лицо, к которому в документе
+относятся основные персональные реквизиты и которое
+является основным субъектом взыскания.
+
+Если в документе несколько должников или соответчиков,
+не считай автоматически первого найденного человека
+основным должником.
+
+Определи основного должника по смыслу документа:
+- по явному указанию "должник";
+- по основной карточке или блоку реквизитов;
+- по ФИО, к которому относятся адрес, дата рождения,
+  паспорт, ИНН, СНИЛС или другие основные реквизиты;
+- по структуре исполнительного листа или судебного акта.
+
+Если надёжно определить основного должника нельзя,
+верни primary_debtor_index = null.
+
 Правила:
 - включай только лиц, прямо указанных как должники;
 - каждого должника возвращай отдельным объектом;
-- не включай взыскателя, организацию-взыскателя,
-  судью, судебного пристава или представителя;
+- не включай взыскателя;
+- не включай организацию-взыскателя;
+- не включай судью;
+- не включай судебного пристава;
+- не включай представителя;
 - не объединяй нескольких должников в одного;
 - ИНН организации-взыскателя не является ИНН должника;
 - ИНН, СНИЛС, паспорт, дату рождения и адрес
@@ -542,15 +574,16 @@ def extract_debtors(
 - если значение отсутствует, верни null;
 - ничего не придумывай;
 - не создавай должников только из-за упоминания
-  посторонних лиц в описательной части документа.
+  посторонних лиц в описательной части.
 
 Текст:
+
 {context}
 """
 
-    # ------------------------------------------------------------
+    # ========================================================
     # Первая попытка
-    # ------------------------------------------------------------
+    # ========================================================
 
     prompt = build_prompt(
         debtor_context
@@ -566,59 +599,58 @@ def extract_debtors(
 
         return result
 
-    except ValueError as exc:
+    except ValueError:
+
         print(
             "  Qwen [debtors]: некорректный JSON, "
             "повторная попытка..."
         )
 
-        # --------------------------------------------------------
-        # Fallback:
-        # ещё сильнее уменьшаем контекст.
-        # --------------------------------------------------------
+    # ========================================================
+    # Fallback — уменьшаем контекст
+    # ========================================================
 
-        retry_context_chars = 3500
+    retry_context_chars = 3500
 
-        if len(full_text) <= retry_context_chars:
-            retry_context = full_text
+    if len(full_text) <= retry_context_chars:
+        retry_context = full_text
 
-        else:
-            retry_context = (
-                full_text[:2500]
-                + "\n\n...[часть документа пропущена]...\n\n"
-                + full_text[-1000:]
-            )
+    else:
+        retry_context = (
+            full_text[:2500]
+            + "\n\n...[часть документа пропущена]...\n\n"
+            + full_text[-1000:]
+        )
+
+    print(
+        f"  Debtors retry context: "
+        f"{len(full_text)} -> "
+        f"{len(retry_context)} символов"
+    )
+
+    retry_prompt = build_prompt(
+        retry_context
+    )
+
+    try:
+        return call_ollama_json(
+            prompt=retry_prompt,
+            response_model=DebtorsExtraction,
+            pass_name="debtors-retry",
+            num_predict=600,
+        )
+
+    except ValueError:
 
         print(
-            f"  Debtors retry context: "
-            f"{len(full_text)} -> "
-            f"{len(retry_context)} символов"
+            "  Qwen [debtors]: не удалось получить "
+            "корректный JSON. Продолжаем без должников."
         )
 
-        retry_prompt = build_prompt(
-            retry_context
+        return DebtorsExtraction(
+            debtors=[],
+            primary_debtor_index=None,
         )
-
-        try:
-            return call_ollama_json(
-                prompt=retry_prompt,
-                response_model=DebtorsExtraction,
-                pass_name="debtors-retry",
-                num_predict=600,
-            )
-
-        except ValueError:
-            # Ошибка извлечения должников не должна
-            # ронять обработку всего документа.
-            print(
-                "  Qwen [debtors]: не удалось получить "
-                "корректный JSON. Продолжаем без должников."
-            )
-
-            return DebtorsExtraction(
-                debtors=[]
-            )
-
 # ============================================================
 # Нормализация
 # ============================================================
@@ -730,7 +762,176 @@ def normalize_case_number(
             return candidate
 
     return value
+def extract_case_date_from_text(
+    text: str,
+    case_number: Optional[str],
+) -> Optional[str]:
+    """
+    Ищет дату, привязанную именно к номеру дела.
 
+    Пример:
+    по делу №2-8179/2032 от 03.12.2032
+    """
+
+    if not text or not case_number:
+        return None
+
+    escaped_case = re.escape(
+        case_number.strip()
+    )
+
+    pattern = (
+        rf"(?:по\s+делу|дел[ау])"
+        rf".{{0,120}}?"
+        rf"№?\s*{escaped_case}"
+        rf"\s+от\s+"
+        rf"(\d{{2}}\.\d{{2}}\.\d{{4}})"
+    )
+
+    match = re.search(
+        pattern,
+        text,
+        flags=(
+            re.IGNORECASE
+            | re.DOTALL
+        ),
+    )
+
+    if not match:
+        return None
+
+    return normalize_date(
+        match.group(1)
+    )
+
+
+def extract_debt_period_from_text(
+    text: str,
+) -> tuple[
+    Optional[str],
+    Optional[str],
+]:
+    """
+    Ищет период именно задолженности.
+
+    Пример:
+    задолженность ... за период
+    с 03.07.2028 по 18.05.2029
+    """
+
+    if not text:
+        return None, None
+
+    patterns = [
+        (
+            r"задолженн\w*"
+            r".{0,500}?"
+            r"за\s+период\s+с\s+"
+            r"(\d{2}\.\d{2}\.\d{4})"
+            r"\s+по\s+"
+            r"(\d{2}\.\d{2}\.\d{4})"
+        ),
+        (
+            r"за\s+период\s+с\s+"
+            r"(\d{2}\.\d{2}\.\d{4})"
+            r"\s+по\s+"
+            r"(\d{2}\.\d{2}\.\d{4})"
+        ),
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            flags=(
+                re.IGNORECASE
+                | re.DOTALL
+            ),
+        )
+
+        if match:
+
+            return (
+                normalize_date(
+                    match.group(1)
+                ),
+                normalize_date(
+                    match.group(2)
+                ),
+            )
+
+    return None, None
+
+
+def normalize_name_for_match(
+    value: Optional[str],
+) -> Optional[str]:
+
+    if not value:
+        return None
+
+    return re.sub(
+        r"[^а-яёa-z]",
+        "",
+        value.lower(),
+        flags=re.IGNORECASE,
+    )
+
+
+def find_primary_debtor_index(
+    text: str,
+    debtors: list[DebtorCandidate],
+) -> Optional[int]:
+    """
+    Ищет должника из явного блока:
+
+    "Должником по исполнительному документу
+    является: физическое лицо ..."
+    """
+
+    if not text or not debtors:
+        return None
+
+    pattern = (
+        r"должником\s+по\s+исполнительному\s+"
+        r"документу\s+является"
+        r".{0,200}?"
+        r"физическое\s+лицо\s+"
+        r"([а-яё-]+\s+[а-яё-]+\s+[а-яё-]+)"
+    )
+
+    match = re.search(
+        pattern,
+        text,
+        flags=(
+            re.IGNORECASE
+            | re.DOTALL
+        ),
+    )
+
+    if not match:
+        return None
+
+    target_name = normalize_name_for_match(
+        match.group(1)
+    )
+
+    if not target_name:
+        return None
+
+    for index, debtor in enumerate(
+        debtors
+    ):
+
+        debtor_name = normalize_name_for_match(
+            debtor.full_name
+        )
+
+        if debtor_name == target_name:
+            return index
+
+    return None
 
 def normalize_llm_results(
     facts: DocumentFacts,
@@ -738,17 +939,42 @@ def normalize_llm_results(
     document_text: str,
 ) -> None:
     """
-    Минимальная постобработка.
+    Нормализация и детерминированная
+    постобработка результатов LLM.
     """
+
+    # ========================================
+    # Номер дела
+    # ========================================
 
     facts.case_number = normalize_case_number(
         facts.case_number,
         document_text,
     )
 
+    # ========================================
+    # Дата судебного дела
+    # ========================================
+
     facts.case_date = normalize_date(
         facts.case_date
     )
+
+    deterministic_case_date = (
+        extract_case_date_from_text(
+            document_text,
+            facts.case_number,
+        )
+    )
+
+    if deterministic_case_date:
+        facts.case_date = (
+            deterministic_case_date
+        )
+
+    # ========================================
+    # Период задолженности
+    # ========================================
 
     facts.debt_period_start = normalize_date(
         facts.debt_period_start
@@ -758,12 +984,53 @@ def normalize_llm_results(
         facts.debt_period_end
     )
 
+    (
+        deterministic_period_start,
+        deterministic_period_end,
+    ) = extract_debt_period_from_text(
+        document_text
+    )
+
+    if deterministic_period_start:
+        facts.debt_period_start = (
+            deterministic_period_start
+        )
+
+    if deterministic_period_end:
+        facts.debt_period_end = (
+            deterministic_period_end
+        )
+
+    # ========================================
+    # Должники
+    # ========================================
+
     for debtor in debtors_result.debtors:
+
         debtor.birth_date = normalize_date(
             debtor.birth_date
         )
 
+    # Если Qwen сама не определила основного
+    # должника — пробуем взять его из
+    # явного блока исполнительного листа.
+    if (
+        debtors_result.primary_debtor_index
+        is None
+    ):
 
+        primary_index = (
+            find_primary_debtor_index(
+                document_text,
+                debtors_result.debtors,
+            )
+        )
+
+        if primary_index is not None:
+
+            debtors_result.primary_debtor_index = (
+                primary_index
+            )
 # ============================================================
 # Вспомогательная логика
 # ============================================================
@@ -876,8 +1143,12 @@ def merge_results(
     """
     Объединяет результаты двух проходов.
 
-    Бизнес-логика выбора основного должника
-    намеренно не меняется.
+    Основного должника выбираем по
+    primary_debtor_index от Qwen.
+
+    Если модель не смогла определить его,
+    используем первого найденного должника
+    как fallback.
     """
 
     debtors = debtors_result.debtors
@@ -886,21 +1157,47 @@ def merge_results(
 
     primary_debtor = None
 
-    if len(debtors) == 1:
+    # ========================================
+    # Выбор основного должника
+    # ========================================
+
+    primary_index = (
+        debtors_result.primary_debtor_index
+    )
+
+    if (
+        primary_index is not None
+        and 0 <= primary_index < len(debtors)
+    ):
+        primary_debtor = (
+            debtors[primary_index]
+        )
+
+    elif debtors:
+
         primary_debtor = debtors[0]
 
-    elif len(debtors) > 1:
-        warnings.append(
-            "Найдено несколько должников. "
-            "Основной должник пока не определён "
-            "однозначно."
-        )
+        if len(debtors) > 1:
+            warnings.append(
+                "Найдено несколько должников, "
+                "но основной не определён однозначно. "
+                "Использован первый найденный должник."
+            )
+
+    # ========================================
+    # Персональные данные
+    # ========================================
 
     full_name = None
     birth_date = None
+
     passport = None
     snils = None
     inn = None
+
+    street = None
+    house = None
+    apartment = None
 
     last_name = None
     first_name = None
@@ -928,6 +1225,18 @@ def merge_results(
             primary_debtor.inn
         )
 
+        street = (
+            primary_debtor.street
+        )
+
+        house = (
+            primary_debtor.house
+        )
+
+        apartment = (
+            primary_debtor.apartment
+        )
+
         (
             last_name,
             first_name,
@@ -936,30 +1245,9 @@ def merge_results(
             full_name
         )
 
-    if primary_debtor is not None:
-
-        street = primary_debtor.street
-        house = primary_debtor.house
-        apartment = (
-            primary_debtor.apartment
-        )
-
-    else:
-
-        street = get_common_value(
-            debtors,
-            "street",
-        )
-
-        house = get_common_value(
-            debtors,
-            "house",
-        )
-
-        apartment = get_common_value(
-            debtors,
-            "apartment",
-        )
+    # ========================================
+    # Все должники
+    # ========================================
 
     defendants_names = (
         build_co_defendants_names(
@@ -972,6 +1260,10 @@ def merge_results(
         if debtors
         else None
     )
+
+    # ========================================
+    # Итог
+    # ========================================
 
     fields = OfficialExtractedFields(
         document_type=(
@@ -1033,7 +1325,6 @@ def merge_results(
     )
 
     return fields
-
 
 # ============================================================
 # Missing fields
