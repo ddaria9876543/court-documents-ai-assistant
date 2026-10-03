@@ -47,6 +47,48 @@ const statusConfig: Record<
   },
 }
 
+const formatDocumentType = (
+  value?: string | null,
+) => {
+  if (!value) {
+    return '—'
+  }
+
+  const cleaned = value
+    .replace(/\u0301/g, '')
+    .trim()
+    .toLowerCase()
+
+  const typeMap: Record<string, string> = {
+    'судебный приказ':
+      'Судебный приказ',
+
+    'исполнительный лист':
+      'Исполнительный лист',
+
+    'постановление фссп':
+      'Постановление ФССП',
+
+    'определение':
+      'Определение',
+
+    'исполнительное производство':
+      'Исполнительное производство',
+
+    'исполнительное постановление':
+      'Исполнительное постановление',
+  }
+
+  if (typeMap[cleaned]) {
+    return typeMap[cleaned]
+  }
+
+  return (
+    cleaned.charAt(0).toUpperCase() +
+    cleaned.slice(1)
+  )
+}
+
 export default function Home() {
   const navigate = useNavigate()
 
@@ -64,12 +106,12 @@ export default function Home() {
 
     try {
       const response = await fetch(
-        `${BACKEND_URL}/documents`
+        `${BACKEND_URL}/documents`,
       )
 
       if (!response.ok) {
         throw new Error(
-          `HTTP ${response.status}`
+          `HTTP ${response.status}`,
         )
       }
 
@@ -80,11 +122,11 @@ export default function Home() {
     } catch (error) {
       console.error(
         'Ошибка загрузки документов:',
-        error
+        error,
       )
 
       message.error(
-        'Не удалось получить документы с backend'
+        'Не удалось получить документы с backend',
       )
     } finally {
       setLoading(false)
@@ -103,57 +145,57 @@ export default function Home() {
   const today = documents.filter(
     (d) =>
       d.createdAt.startsWith(
-        todayString
-      )
+        todayString,
+      ),
   )
 
   const processed = documents.filter(
     (d) =>
-      d.status === 'processed'
+      d.status === 'processed',
   )
 
   const sent = documents.filter(
     (d) =>
-      d.status === 'sent'
+      d.status === 'sent',
   )
 
   const needsReview =
     documents.filter(
       (d) =>
-        d.status === 'needs_review'
+        d.status === 'needs_review',
     )
 
   const requiresLegalAction =
     documents.filter(
       (d) =>
-        d.requiresLegalAction
+        d.requiresLegalAction,
     )
 
   const errors = documents.filter(
     (d) =>
-      d.status === 'error'
+      d.status === 'error',
   )
 
   const sortedDocuments =
     [...documents].sort(
       (a, b) =>
         new Date(
-          b.createdAt
+          b.createdAt,
         ).getTime() -
         new Date(
-          a.createdAt
-        ).getTime()
+          a.createdAt,
+        ).getTime(),
     )
 
   const sortedNeedsReview =
     [...needsReview].sort(
       (a, b) =>
         new Date(
-          b.createdAt
+          b.createdAt,
         ).getTime() -
         new Date(
-          a.createdAt
-        ).getTime()
+          a.createdAt,
+        ).getTime(),
     )
 
   const columns = [
@@ -164,13 +206,13 @@ export default function Home() {
 
       sorter: (
         a: Document,
-        b: Document
+        b: Document,
       ) =>
         new Date(
-          a.createdAt
+          a.createdAt,
         ).getTime() -
         new Date(
-          b.createdAt
+          b.createdAt,
         ).getTime(),
 
       defaultSortOrder:
@@ -178,9 +220,9 @@ export default function Home() {
 
       render: (value: string) =>
         new Date(
-          value
+          value,
         ).toLocaleString(
-          'ru-RU'
+          'ru-RU',
         ),
     },
 
@@ -192,6 +234,11 @@ export default function Home() {
     {
       title: 'Тип',
       dataIndex: 'documentType',
+
+      render: (
+        value?: string | null,
+      ) =>
+        formatDocumentType(value),
     },
 
     {
@@ -200,7 +247,7 @@ export default function Home() {
 
       render: (
         _: unknown,
-        record: Document
+        record: Document,
       ) =>
         record.caseNumber ||
         record.enforcementNumber ||
@@ -213,7 +260,7 @@ export default function Home() {
 
       render: (
         _: unknown,
-        record: Document
+        record: Document,
       ) =>
         record.requiresLegalAction ? (
           <Tag color="orange">
@@ -231,7 +278,7 @@ export default function Home() {
       dataIndex: 'status',
 
       render: (
-        status: string
+        status: string,
       ) => {
         const cfg =
           statusConfig[
@@ -384,7 +431,7 @@ export default function Home() {
                 key={doc.id}
                 onClick={() =>
                   navigate(
-                    `/documents/${doc.id}`
+                    `/documents/${doc.id}`,
                   )
                 }
                 style={{
@@ -422,8 +469,11 @@ export default function Home() {
                       marginBottom: 2,
                     }}
                   >
-                    {doc.documentType ||
-                      'Тип не определён'}
+                    {doc.documentType
+                      ? formatDocumentType(
+                          doc.documentType,
+                        )
+                      : 'Тип не определён'}
                   </div>
 
                   <div
@@ -461,9 +511,7 @@ export default function Home() {
                           13,
                       }}
                     >
-                      {
-                        doc.summary
-                      }
+                      {doc.summary}
                     </div>
                   )}
                 </div>
@@ -471,19 +519,19 @@ export default function Home() {
                 <Button
                   type="link"
                   onClick={(
-                    event
+                    event,
                   ) => {
                     event.stopPropagation()
 
                     navigate(
-                      `/documents/${doc.id}`
+                      `/documents/${doc.id}`,
                     )
                   }}
                 >
                   Проверить
                 </Button>
               </div>
-            )
+            ),
           )}
         </Card>
       )}
@@ -498,11 +546,11 @@ export default function Home() {
           loading={loading}
           pagination={false}
           onRow={(
-            record
+            record,
           ) => ({
             onClick: () =>
               navigate(
-                `/documents/${record.id}`
+                `/documents/${record.id}`,
               ),
 
             style: {

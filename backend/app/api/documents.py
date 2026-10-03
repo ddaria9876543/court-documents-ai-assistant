@@ -97,7 +97,71 @@ def get_display_file(
         return pdf_file
 
     return document.files[0]
+def build_short_summary(
+    document: Document,
+) -> str:
+    document_type = (
+        document.document_type
+        or "Документ"
+    )
 
+    document_type = (
+        document_type
+        .replace("\u0301", "")
+        .strip()
+    )
+
+    type_map = {
+        "судебный приказ":
+            "Судебный приказ",
+        "исполнительный лист":
+            "Исполнительный лист",
+        "постановление фссп":
+            "Постановление ФССП",
+        "определение":
+            "Определение",
+        "исполнительное производство":
+            "Исполнительное производство",
+        "исполнительное постановление":
+            "Исполнительное постановление",
+    }
+
+    normalized_type = (
+        document_type.lower()
+    )
+
+    display_type = type_map.get(
+        normalized_type,
+        (
+            document_type[:1].upper()
+            + document_type[1:]
+        ),
+    )
+
+    if document.requires_legal_action:
+        if document.legal_action_reason:
+            reason = (
+                document.legal_action_reason
+                .strip()
+                .rstrip(".")
+            )
+
+            return (
+                f"{display_type}. "
+                f"Требуется внимание юриста: "
+                f"{reason.lower()}."
+            )
+
+        return (
+            f"{display_type}. "
+            "Документ требует внимания юриста."
+        )
+
+    return (
+        f"{display_type}. "
+        "Дополнительных действий юриста "
+        "не требуется."
+    )
 
 def document_to_response(
     document: Document,
@@ -138,7 +202,7 @@ def document_to_response(
             document.created_at,
 
         "summary":
-            document.summary or "",
+            build_short_summary(document),
 
         # Техническая проверка
         "needsReview":

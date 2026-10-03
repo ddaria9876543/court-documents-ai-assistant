@@ -86,7 +86,7 @@ const statusConfig: Record<
 }
 
 const formatAmount = (
-  value?: number | null
+  value?: number | null,
 ) => {
   if (
     value === undefined ||
@@ -96,8 +96,51 @@ const formatAmount = (
   }
 
   return (
-    new Intl.NumberFormat('ru-RU').format(value) +
-    ' руб.'
+    new Intl.NumberFormat('ru-RU').format(
+      value,
+    ) + ' руб.'
+  )
+}
+
+const formatDocumentType = (
+  value?: string | null,
+) => {
+  if (!value) {
+    return '—'
+  }
+
+  const cleaned = value
+    .replace(/\u0301/g, '')
+    .trim()
+    .toLowerCase()
+
+  const typeMap: Record<string, string> = {
+    'судебный приказ':
+      'Судебный приказ',
+
+    'исполнительный лист':
+      'Исполнительный лист',
+
+    'постановление фссп':
+      'Постановление ФССП',
+
+    'определение':
+      'Определение',
+
+    'исполнительное производство':
+      'Исполнительное производство',
+
+    'исполнительное постановление':
+      'Исполнительное постановление',
+  }
+
+  if (typeMap[cleaned]) {
+    return typeMap[cleaned]
+  }
+
+  return (
+    cleaned.charAt(0).toUpperCase() +
+    cleaned.slice(1)
   )
 }
 
@@ -140,12 +183,12 @@ export default function DocumentDetail() {
       setError(null)
 
       const response = await fetch(
-        `${BACKEND_URL}/documents/${id}`
+        `${BACKEND_URL}/documents/${id}`,
       )
 
       if (!response.ok) {
         throw new Error(
-          `Ошибка загрузки: ${response.status}`
+          `Ошибка загрузки: ${response.status}`,
         )
       }
 
@@ -157,7 +200,7 @@ export default function DocumentDetail() {
       console.error(err)
 
       setError(
-        'Не удалось загрузить документ'
+        'Не удалось загрузить документ',
       )
     } finally {
       setLoading(false)
@@ -193,7 +236,7 @@ export default function DocumentDetail() {
   }
 
   const saveChanges = async (
-    values: EditFormValues
+    values: EditFormValues,
   ) => {
     if (!doc) return
 
@@ -221,12 +264,12 @@ export default function DocumentDetail() {
             amount:
               values.amount ?? null,
           }),
-        }
+        },
       )
 
       if (!response.ok) {
         throw new Error(
-          `Ошибка сохранения: ${response.status}`
+          `Ошибка сохранения: ${response.status}`,
         )
       }
 
@@ -238,13 +281,13 @@ export default function DocumentDetail() {
       form.resetFields()
 
       message.success(
-        'Исправления сохранены. Данные считаются проверенными.'
+        'Исправления сохранены. Данные считаются проверенными.',
       )
     } catch (err) {
       console.error(err)
 
       message.error(
-        'Не удалось сохранить исправления'
+        'Не удалось сохранить исправления',
       )
     } finally {
       setSaving(false)
@@ -261,12 +304,12 @@ export default function DocumentDetail() {
         `${BACKEND_URL}/documents/${doc.id}/verify`,
         {
           method: 'PUT',
-        }
+        },
       )
 
       if (!response.ok) {
         throw new Error(
-          `Ошибка подтверждения: ${response.status}`
+          `Ошибка подтверждения: ${response.status}`,
         )
       }
 
@@ -276,13 +319,13 @@ export default function DocumentDetail() {
       setDoc(updatedDocument)
 
       message.success(
-        'Извлечённые данные подтверждены'
+        'Извлечённые данные подтверждены',
       )
     } catch (err) {
       console.error(err)
 
       message.error(
-        'Не удалось подтвердить данные'
+        'Не удалось подтвердить данные',
       )
     } finally {
       setActionLoading(false)
@@ -291,7 +334,7 @@ export default function DocumentDetail() {
 
   const updateStatus = async (
     status: 'processed' | 'sent',
-    successMessage: string
+    successMessage: string,
   ) => {
     if (!doc) return
 
@@ -309,12 +352,12 @@ export default function DocumentDetail() {
           body: JSON.stringify({
             status,
           }),
-        }
+        },
       )
 
       if (!response.ok) {
         throw new Error(
-          `Ошибка изменения статуса: ${response.status}`
+          `Ошибка изменения статуса: ${response.status}`,
         )
       }
 
@@ -328,7 +371,7 @@ export default function DocumentDetail() {
       console.error(err)
 
       message.error(
-        'Не удалось изменить статус документа'
+        'Не удалось изменить статус документа',
       )
     } finally {
       setActionLoading(false)
@@ -339,7 +382,7 @@ export default function DocumentDetail() {
     async () => {
       await updateStatus(
         'processed',
-        'Документ обработан и не требует отправки'
+        'Документ обработан и не требует отправки',
       )
     }
 
@@ -355,7 +398,7 @@ export default function DocumentDetail() {
         `${BACKEND_URL}/documents/${doc.id}/send-email`,
         {
           method: 'POST',
-        }
+        },
       )
 
       if (!response.ok) {
@@ -371,15 +414,14 @@ export default function DocumentDetail() {
               errorData.detail
           }
         } catch {
-          // Если backend вернул не JSON,
-          // оставляем стандартное сообщение.
+          // Backend вернул не JSON.
         }
 
         throw new Error(errorMessage)
       }
 
       message.success(
-        'Документ отправлен ответственному по e-mail'
+        'Документ отправлен ответственному по e-mail',
       )
 
       await loadDocument()
@@ -491,7 +533,7 @@ export default function DocumentDetail() {
                   onClick={() =>
                     window.open(
                       fileUrl,
-                      '_blank'
+                      '_blank',
                     )
                   }
                 >
@@ -599,7 +641,9 @@ export default function DocumentDetail() {
                   size="small"
                 >
                   <Descriptions.Item label="Тип документа">
-                    {doc.documentType || '—'}
+                    {formatDocumentType(
+                      doc.documentType,
+                    )}
                   </Descriptions.Item>
 
                   <Descriptions.Item label="Номер дела">
@@ -625,9 +669,9 @@ export default function DocumentDetail() {
 
                   <Descriptions.Item label="Дата">
                     {new Date(
-                      doc.createdAt
+                      doc.createdAt,
                     ).toLocaleString(
-                      'ru-RU'
+                      'ru-RU',
                     )}
                   </Descriptions.Item>
 
@@ -700,7 +744,9 @@ export default function DocumentDetail() {
                                 marginTop: 4,
                               }}
                             >
-                              {doc.evidenceFragment}
+                              {
+                                doc.evidenceFragment
+                              }
                             </div>
                           </div>
                         )}
@@ -738,7 +784,8 @@ export default function DocumentDetail() {
                             marginBottom: 4,
                           }}
                         >
-                          Проверка извлечённых данных
+                          Проверка извлечённых
+                          данных
                         </Text>
 
                         <Text
@@ -788,6 +835,11 @@ export default function DocumentDetail() {
                           message="Извлечённые данные проверены"
                           style={{
                             marginBottom: 16,
+                            background:
+                              '#f6ffed',
+                            border:
+                              '1px solid #b7eb8f',
+                            borderRadius: 8,
                           }}
                         />
 
@@ -863,6 +915,11 @@ export default function DocumentDetail() {
                       description="Дополнительных действий юриста не требуется."
                       style={{
                         marginTop: 20,
+                        background:
+                          '#f6ffed',
+                        border:
+                          '1px solid #b7eb8f',
+                        borderRadius: 8,
                       }}
                     />
                   )}
@@ -921,6 +978,10 @@ export default function DocumentDetail() {
                     description="Письмо с документом успешно отправлено через почтовый сервер."
                     style={{
                       marginTop: 20,
+                      background: '#f6ffed',
+                      border:
+                        '1px solid #b7eb8f',
+                      borderRadius: 8,
                     }}
                   />
                 )}

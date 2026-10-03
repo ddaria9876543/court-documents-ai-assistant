@@ -1,5 +1,4 @@
 import {
-  Alert,
   List,
   Modal,
   Typography,
@@ -24,7 +23,7 @@ interface FileGroup {
   xml?: File
 }
 
-const BACKEND_URL = 'http://localhost:8000'
+const BACKEND_URL = 'http://127.0.0.1:8000'
 
 const getBaseName = (filename: string) =>
   filename
@@ -49,24 +48,21 @@ export default function UploadModal({
 
   const totalSize = files.reduce(
     (sum, file) => sum + file.size,
-    0
+    0,
   )
 
   const groups = useMemo<FileGroup[]>(() => {
-    const map =
-      new Map<string, FileGroup>()
+    const map = new Map<string, FileGroup>()
 
     for (const file of files) {
-      const key =
-        getBaseName(file.name)
+      const key = getBaseName(file.name)
 
       const group =
         map.get(key) || {
           key,
         }
 
-      const name =
-        file.name.toLowerCase()
+      const name = file.name.toLowerCase()
 
       if (name.endsWith('.pdf')) {
         group.pdf = file
@@ -76,78 +72,48 @@ export default function UploadModal({
         group.xml = file
       }
 
-      map.set(
-        key,
-        group
-      )
+      map.set(key, group)
     }
 
-    return Array.from(
-      map.values()
-    )
+    return Array.from(map.values())
   }, [files])
 
-  const invalidGroups = groups.filter(
-    (group) =>
-      group.xml &&
-      !group.pdf
-  )
-
-  const uploadSinglePdf = async (
-    pdf: File
+  const uploadSingleFile = async (
+    file: File,
   ) => {
-    const formData =
-      new FormData()
+    const formData = new FormData()
 
-    formData.append(
-      'file',
-      pdf
-    )
+    formData.append('file', file)
 
     return fetch(
       `${BACKEND_URL}/documents/upload`,
       {
         method: 'POST',
         body: formData,
-      }
+      },
     )
   }
 
   const uploadPair = async (
     xml: File,
-    pdf: File
+    pdf: File,
   ) => {
-    const formData =
-      new FormData()
+    const formData = new FormData()
 
-    formData.append(
-      'source_file',
-      xml
-    )
-
-    formData.append(
-      'original_file',
-      pdf
-    )
+    formData.append('source_file', xml)
+    formData.append('original_file', pdf)
 
     return fetch(
       `${BACKEND_URL}/documents/upload-pair`,
       {
         method: 'POST',
         body: formData,
-      }
+      },
     )
   }
 
   const handleOk = async () => {
     if (files.length === 0) {
-      return
-    }
-
-    if (invalidGroups.length > 0) {
-      message.error(
-        'Для XML необходимо добавить соответствующий PDF-оригинал.'
-      )
       return
     }
 
@@ -161,35 +127,30 @@ export default function UploadModal({
       for (const group of groups) {
         let response: Response
 
-        /*
-         * XML + PDF:
-         * один документ.
-         *
-         * XML -> извлечение данных.
-         * PDF -> оригинал.
-         */
-        if (
-          group.xml &&
-          group.pdf
-        ) {
-          response =
-            await uploadPair(
-              group.xml,
-              group.pdf
-            )
+        // XML + PDF:
+        // XML используется как источник данных,
+        // PDF сохраняется как оригинал.
+        if (group.xml && group.pdf) {
+          response = await uploadPair(
+            group.xml,
+            group.pdf,
+          )
         }
 
-        /*
-         * Только PDF:
-         * обычный судебный документ.
-         */
-        else if (
-          group.pdf
-        ) {
-          response =
-            await uploadSinglePdf(
-              group.pdf
-            )
+        // Только XML:
+        // XML разрешено обрабатывать самостоятельно.
+        else if (group.xml) {
+          response = await uploadSingleFile(
+            group.xml,
+          )
+        }
+
+        // Только PDF:
+        // обычный судебный документ.
+        else if (group.pdf) {
+          response = await uploadSingleFile(
+            group.pdf,
+          )
         } else {
           continue
         }
@@ -198,38 +159,29 @@ export default function UploadModal({
           errorCount++
 
           console.error(
-            await response.text()
+            await response.text(),
           )
 
           continue
         }
 
-        const result =
-          await response.json()
+        const result = await response.json()
 
-        if (
-          result.uploaded?.length
-        ) {
+        if (result.uploaded?.length) {
           successCount +=
             result.uploaded.length
         }
 
-        if (
-          result.duplicates?.length
-        ) {
+        if (result.duplicates?.length) {
           duplicateCount +=
             result.duplicates.length
         }
 
-        if (
-          result.errors?.length
-        ) {
+        if (result.errors?.length) {
           errorCount +=
             result.errors.length
 
-          console.error(
-            result.errors
-          )
+          console.error(result.errors)
         }
       }
     } catch (error) {
@@ -244,24 +196,22 @@ export default function UploadModal({
       errorCount === 0
     ) {
       message.success(
-        `Загружено документов: ${successCount}`
+        `Загружено документов: ${successCount}`,
       )
-    } else if (
-      successCount > 0
-    ) {
+    } else if (successCount > 0) {
       message.warning(
-        `Загружено: ${successCount}, ошибок: ${errorCount}`
+        `Загружено: ${successCount}, ошибок: ${errorCount}`,
       )
     } else if (
       duplicateCount > 0 &&
       errorCount === 0
     ) {
       message.info(
-        `Дубликатов: ${duplicateCount}`
+        `Дубликатов: ${duplicateCount}`,
       )
     } else {
       message.error(
-        'Не удалось загрузить документы'
+        'Не удалось загрузить документы',
       )
 
       return
@@ -292,9 +242,7 @@ export default function UploadModal({
       cancelText="Отмена"
       confirmLoading={uploading}
       okButtonProps={{
-        disabled:
-          files.length === 0 ||
-          invalidGroups.length > 0,
+        disabled: files.length === 0,
       }}
       width={650}
     >
@@ -307,8 +255,7 @@ export default function UploadModal({
             const duplicate =
               previous.some(
                 (existing) =>
-                  existing.name ===
-                  file.name
+                  existing.name === file.name,
               )
 
             if (duplicate) {
@@ -327,14 +274,12 @@ export default function UploadModal({
           setFiles((previous) =>
             previous.filter(
               (existing) =>
-                existing.name !==
-                file.name
-            )
+                existing.name !== file.name,
+            ),
           )
         }}
         showUploadList={{
-          showRemoveIcon:
-            !uploading,
+          showRemoveIcon: !uploading,
         }}
       >
         <p className="ant-upload-drag-icon">
@@ -349,9 +294,10 @@ export default function UploadModal({
         </p>
 
         <p className="ant-upload-hint">
-          PDF можно загружать отдельно.
-          Для документов ФССП загружайте
-          XML и PDF с одинаковым именем.
+          PDF и XML можно загружать отдельно.
+          Для XML ФССП при наличии PDF
+          с таким же именем можно загрузить
+          оба файла вместе.
         </p>
       </Dragger>
 
@@ -396,15 +342,23 @@ export default function UploadModal({
 
                   {group.xml &&
                     !group.pdf && (
-                      <Text type="danger">
-                        Добавьте PDF-оригинал
+                      <Text type="secondary">
+                        XML будет обработан
+                        самостоятельно
                       </Text>
                     )}
 
                   {!group.xml &&
                     group.pdf && (
                       <Text type="secondary">
-                        Обычный PDF-документ
+                        PDF-документ
+                      </Text>
+                    )}
+
+                  {group.xml &&
+                    group.pdf && (
+                      <Text type="success">
+                        XML + PDF-оригинал
                       </Text>
                     )}
                 </div>
@@ -412,18 +366,6 @@ export default function UploadModal({
             )}
           />
         </div>
-      )}
-
-      {invalidGroups.length > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          message="Не найден PDF-оригинал"
-          description="Для XML добавьте PDF с таким же именем, например fssp_018.xml + fssp_018.pdf."
-          style={{
-            marginTop: 16,
-          }}
-        />
       )}
     </Modal>
   )
