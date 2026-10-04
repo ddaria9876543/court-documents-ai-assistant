@@ -1,0 +1,22 @@
+# PyCharm
+.idea/
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Uploaded documents / local storage
+backend/storage/
+
+# OS
+.DS_Store
+Thumbs.db
