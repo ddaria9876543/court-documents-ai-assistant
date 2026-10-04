@@ -1,0 +1,477 @@
+from pathlib import Path
+
+import pymupdf
+
+from field_extractor import extract_fields
+from llm_extractor import extract_fields_with_llm
+from legal_action_classifier import classify_legal_action
+
+from models import (
+    ParsedDocument,
+    ParsedPage,
+    ExtractedFields,
+    OfficialExtractedFields,
+)
+
+from pdf_parser import ocr_pdf
+
+from xml_parser import (
+    parse_fssp_xml,
+    extract_official_fields_from_xml,
+)
+
+from validators import (
+    validate_official_fields,
+)
+
+
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".xml",
+}
+
+
+def extract_text_from_pdf(
+    pdf_path: Path,
+) -> list[ParsedPage]:
+    """
+    Извлекает текст напрямую из PDF,
+    если в документе есть текстовый слой.
+    """
+
+    document = pymupdf.open(
+        pdf_path
+    )
+
+    pages = []
+
+    try:
+        for index, page in enumerate(
+            document
+        ):
+            text = (
+                page.get_text("text")
+                or ""
+            ).strip()
+
+            pages.append(
+                ParsedPage(
+                    page_number=index + 1,
+                    text=text,
+                    source="pdf_text",
+                    ocr_used=False,
+                )
+            )
+
+    finally:
+        document.close()
+
+    return pages
+
+
+def has_enough_text(
+    pages: list[ParsedPage],
+) -> bool:
+    """
+    Определяет, есть ли в PDF
+    нормальный текстовый слой.
+    """
+
+    full_text = "\n".join(
+        page.text
+        for page in pages
+        if page.text
+    )
+
+    letters = sum(
+        1
+        for char in full_text
+        if char.isalpha()
+    )
+
+    return letters >= 100
+
+
+def convert_ocr_pages(
+    ocr_pages: list[dict],
+) -> list[ParsedPage]:
+    """
+    Переводит результат pdf_parser.py
+    в единый формат ParsedPage.
+    """
+
+    pages = []
+
+    for page in ocr_pages:
+
+        warnings = []
+
+        if (
+            page.get("ocr_score") is not None
+            and page["ocr_score"] < 25
+        ):
+            warnings.append(
+                "Низкое качество OCR"
+            )
+
+        pages.append(
+            ParsedPage(
+                page_number=page["page"],
+                text=page["text"],
+                source="ocr",
+                ocr_used=True,
+                ocr_psm=page["psm"],
+                warnings=warnings,
+            )
+        )
+
+    return pages
+
+
+def build_extracted_fields(
+    text: str,
+) -> ExtractedFields:
+    """
+    Преобразует обычный dict
+    из field_extractor.py
+    в Pydantic-модель.
+    """
+
+    fields_dict = extract_fields(
+        text
+    )
+
+    return ExtractedFields(
+        **fields_dict
+    )
+
+
+def process_pdf(
+    pdf_path: Path,
+) -> ParsedDocument:
+    """
+    Универсальная предварительная
+    обработка PDF.
+
+    1. Пробуем получить текст напрямую.
+    2. Если текста недостаточно —
+       запускаем OCR.
+    3. Собираем ParsedDocument.
+    """
+
+    warnings = []
+
+    text_pages = extract_text_from_pdf(
+        pdf_path
+    )
+
+    if has_enough_text(
+        text_pages
+    ):
+        pages = text_pages
+        extraction_method = "pdf_text"
+
+    else:
+        warnings.append(
+            "Текстовый слой отсутствует "
+            "или содержит слишком мало текста. "
+            "Использован OCR."
+        )
+
+        ocr_pages = ocr_pdf(
+            str(pdf_path)
+        )
+
+        pages = convert_ocr_pages(
+            ocr_pages
+        )
+
+        extraction_method = "ocr"
+
+    full_text = "\n\n".join(
+        page.text
+        for page in pages
+        if page.text.strip()
+    )
+
+    fields = build_extracted_fields(
+        full_text
+    )
+
+    status = "ok"
+
+    if not full_text.strip():
+        status = "error"
+
+        warnings.append(
+            "Не удалось извлечь текст "
+            "из документа."
+        )
+
+    elif (
+        fields.document_type is None
+        and fields.case_number is None
+    ):
+        status = "warning"
+
+        warnings.append(
+            "Основные поля документа "
+            "не были распознаны."
+        )
+
+    return ParsedDocument(
+        file_name=pdf_path.name,
+        file_path=str(pdf_path),
+        file_type="pdf",
+        extraction_method=extraction_method,
+        pages=pages,
+        full_text=full_text,
+        fields=fields,
+        warnings=warnings,
+        status=status,
+    )
+
+
+def process_xml(
+    xml_path: Path,
+) -> ParsedDocument:
+    """
+    Предварительная обработка XML ФССП.
+
+    OCR и LLM здесь не используются.
+    """
+
+    return parse_fssp_xml(
+        xml_path
+    )
+
+
+def process_document(
+    file_path: str | Path,
+) -> ParsedDocument:
+    """
+    Единая техническая точка входа.
+
+    Возвращает ParsedDocument.
+    """
+
+    path = Path(
+        file_path
+    )
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Файл не найден: {path}"
+        )
+
+    extension = path.suffix.lower()
+
+    if extension not in SUPPORTED_EXTENSIONS:
+        raise ValueError(
+            "Неподдерживаемый формат файла: "
+            f"{extension}"
+        )
+
+    if extension == ".pdf":
+        return process_pdf(
+            path
+        )
+
+    if extension == ".xml":
+        return process_xml(
+            path
+        )
+
+    raise ValueError(
+        f"Неизвестный формат: {extension}"
+    )
+
+
+def add_legal_action_result(
+    fields: OfficialExtractedFields,
+    full_text: str,
+) -> OfficialExtractedFields:
+    """
+    Анализирует содержание документа
+    и добавляет результат юридической
+    маршрутизации.
+
+    Важно:
+
+    needs_review / status unclear —
+    техническая ручная проверка
+    из-за проблем OCR, извлечения
+    или противоречивых реквизитов.
+
+    requires_legal_action —
+    документ по своему содержанию
+    требует внимания юриста.
+
+    Решение о дальнейших юридических
+    действиях остаётся за сотрудником.
+    """
+
+    legal_action = classify_legal_action(
+        full_text,
+        fields.model_dump(),
+    )
+
+    return fields.model_copy(
+        update={
+            "requires_legal_action":
+                legal_action[
+                    "requires_legal_action"
+                ],
+
+            "legal_action_reason":
+                legal_action[
+                    "legal_action_reason"
+                ],
+
+            "evidence_fragment":
+                legal_action[
+                    "evidence_fragment"
+                ],
+        }
+    )
+
+
+def process_document_official(
+    file_path: str | Path,
+) -> OfficialExtractedFields:
+    """
+    Финальная точка входа.
+
+    PDF:
+    PDF
+    -> PyMuPDF / Tesseract
+    -> ParsedDocument
+    -> Qwen
+    -> validators
+    -> legal action classifier
+    -> OfficialExtractedFields
+
+    XML:
+    XML
+    -> lxml
+    -> структурированные теги
+    -> validators
+    -> legal action classifier
+    -> OfficialExtractedFields
+
+
+    Юридическая маршрутизация:
+
+    requires_legal_action = True,
+    например при:
+
+    - отказе в возбуждении
+      исполнительного производства;
+
+    - возврате исполнительного
+      документа без полного взыскания;
+
+    - отмене судебного приказа;
+
+    - отказе в требованиях;
+
+    - возврате заявления;
+
+    - требовании устранить недостатки;
+
+    - требовании представить
+      дополнительные документы;
+
+    - прекращении или окончании
+      производства, если взыскание
+      не завершено.
+
+    Окончание производства после
+    полного взыскания само по себе
+    действий юриста не требует.
+
+    Для положительного решения
+    сохраняются:
+
+    legal_action_reason
+    evidence_fragment
+    """
+
+    path = Path(
+        file_path
+    )
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Файл не найден: {path}"
+        )
+
+    extension = path.suffix.lower()
+
+    if extension not in SUPPORTED_EXTENSIONS:
+        raise ValueError(
+            "Неподдерживаемый формат файла: "
+            f"{extension}"
+        )
+
+    # ========================================
+    # PDF
+    # ========================================
+
+    if extension == ".pdf":
+
+        document = process_pdf(
+            path
+        )
+
+        if not document.full_text.strip():
+            raise ValueError(
+                "Не удалось получить текст "
+                "из PDF-документа."
+            )
+
+        fields = extract_fields_with_llm(
+            document
+        )
+
+        fields = validate_official_fields(
+            fields
+        )
+
+        fields = add_legal_action_result(
+            fields,
+            document.full_text,
+        )
+
+        return fields
+
+    # ========================================
+    # XML
+    # ========================================
+
+    if extension == ".xml":
+
+        document = process_xml(
+            path
+        )
+
+        fields = (
+            extract_official_fields_from_xml(
+                path
+            )
+        )
+
+        fields = validate_official_fields(
+            fields
+        )
+
+        fields = add_legal_action_result(
+            fields,
+            document.full_text,
+        )
+
+        return fields
+
+    raise ValueError(
+        f"Неизвестный формат: {extension}"
+    )
