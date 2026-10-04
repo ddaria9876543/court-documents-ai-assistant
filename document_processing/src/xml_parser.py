@@ -937,17 +937,11 @@ def extract_official_fields_from_xml(
     # ========================================
     # Суммы
     # ========================================
-
     principal_debt = (
         extract_principal_debt(
             debt_text
         )
     )
-
-    if principal_debt is None:
-        principal_debt = normalize_amount(
-            id_debt_sum
-        )
     penalty_amount = (
         extract_penalty(
             debt_text

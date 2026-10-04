@@ -83,7 +83,7 @@ export default function UploadModal({
   ) => {
     const formData = new FormData()
 
-    formData.append('file', file)
+    formData.append('files', file)
 
     return fetch(
       `${BACKEND_URL}/documents/upload`,
