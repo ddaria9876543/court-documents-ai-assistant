@@ -105,27 +105,32 @@ SMTP_USE_SSL=true
 
 ## Запуск системы с локального устройства производится по следующей схеме:
 1. С помощью любой среды в терминал PowerShell копируется репозиторий проекта следующим кодом:
-```git clone https://git.codenrock.com/codenrock/ii-assistenty/ii-sestry/pomoshchnik-dlya-analiza-dokumentov-iz-sudov-ocr-i-izvlechenie-dannykh.git
+```PowerShell
+git clone https://git.codenrock.com/codenrock/ii-assistenty/ii-sestry/pomoshchnik-dlya-analiza-dokumentov-iz-sudov-ocr-i-izvlechenie-dannykh.git
 cd pomoshchnik-dlya-analiza-dokumentov-iz-sudov-ocr-i-izvlechenie-dannykh
 ```
 2. Создаётся окружение
-```python -m venv .venv
+```PowerShell
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 3. Устанавливаются зависимости, подключается Ollama, PostgreSQL. 
 Перед docker compose up необходимо открыть docker desktop
-```pip install -r backend\requirements.txt
+```PowerShell
+pip install -r backend\requirements.txt
 pip install -r document_processing\requirements.txt
 ollama pull qwen3:4b
 cd backend
 docker compose up -d
 ```
 4. Проводятся миграции. В нынешнем окне запускаем backend.
-```python -m alembic upgrade head
+```PowerShell
+python -m alembic upgrade head
 python -m uvicorn app.main:app --reload
 ```
 5. Открывается новое окно терминала PowerShell для запуска frontend
-```.\.venv\Scripts\Activate.ps1
+```PowerShell
+.\.venv\Scripts\Activate.ps1
 cd frontend
 npm install
 npm run dev
