@@ -10,6 +10,7 @@ from app.models import (
     Document,
     DocumentFile,
     DocumentHistory,
+    ProcessingEvent,
     StgDocumentExtraction,
 )
 

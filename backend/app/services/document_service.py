@@ -1,9 +1,12 @@
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.document import Document
 from app.models.document_file import DocumentFile
 from app.models.document_history import DocumentHistory
+from app.models.processing_event import ProcessingEvent
 from app.models.stg_document_extraction import StgDocumentExtraction
 
 
@@ -177,7 +180,38 @@ def to_float_or_none(value):
     except (TypeError, ValueError):
         return None
 
+def add_processing_event(
+    db: Session,
+    document_id: int,
+    attempt: int,
+    event_type: str,
+    status: str,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+    duration_ms: int | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    worker_name: str | None = None,
+    model_name: str | None = None,
+) -> ProcessingEvent:
 
+    event = ProcessingEvent(
+        document_id=document_id,
+        attempt=attempt,
+        event_type=event_type,
+        status=status,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_ms=duration_ms,
+        error_type=error_type,
+        error_message=error_message,
+        worker_name=worker_name,
+        model_name=model_name,
+    )
+
+    db.add(event)
+
+    return event
 def apply_processing_result(
     db: Session,
     document: Document,
@@ -326,6 +360,15 @@ def apply_processing_result(
 
     next_attempt = (
         (last_attempt or 0) + 1
+    )
+    add_processing_event(
+        db=db,
+        document_id=document.id,
+        attempt=next_attempt,
+        event_type="processing_finished",
+        status=str(processing_status),
+        finished_at=datetime.utcnow(),
+        model_name=result.get("model_name"),
     )
 
     staging_result = StgDocumentExtraction(
