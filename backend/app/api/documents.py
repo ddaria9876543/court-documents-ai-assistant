@@ -78,7 +78,7 @@ from app.services.document_service import (
 
 )
 
-
+from app.services.storage_service import storage_service
 
 from app.services.file_service import (
 
@@ -674,27 +674,23 @@ async def upload_documents(
 
             # --------------------------------------------------
 
+            storage_filename = generate_storage_filename(extension)
 
+            object_name = f"originals/{storage_filename}"
 
-            storage_filename = (
-
-                generate_storage_filename(
-
-                    extension
-
-                )
-
+            storage_service.upload_bytes(
+                object_name=object_name,
+                data=content,
+                content_type=(
+                    file.content_type
+                    or "application/octet-stream"
+                ),
             )
-
-
 
             saved_path = save_file(
-
                 content,
-
                 storage_filename,
-
-            )
+            )           
 
 
 
@@ -718,7 +714,7 @@ async def upload_documents(
 
                 ),
 
-                file_path=str(saved_path),
+                file_path=object_name,
 
                 file_format=(
 
@@ -1065,7 +1061,15 @@ async def upload_documents(
 
 
             continue
-
+        finally:
+            if (
+                saved_path
+                and Path(saved_path).exists()
+            ):
+                try:
+                    Path(saved_path).unlink()
+                except OSError:
+                    pass
 
 
     # ----------------------------------------------------------

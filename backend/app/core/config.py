@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = False
     SMTP_USE_SSL: bool = True
 
+    MINIO_ENDPOINT: str = "127.0.0.1:9000"
+    MINIO_ACCESS_KEY: str = "minioadmin"
+    MINIO_SECRET_KEY: str = "minioadmin"
+    MINIO_BUCKET: str = "court-documents"
+    MINIO_SECURE: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

@@ -33,3 +33,8 @@ airflow/webserver_config.py
 airflow/standalone_admin_password.txt
 airflow/.env
 airflow/config/.user.yml
+
+# MinIO local source/build
+minio/minio-src/
+minio/.env
+minio/minio-src/
