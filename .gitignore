@@ -24,3 +24,12 @@ Thumbs.db
 dbt/logs/
 dbt/**/target/
 dbt/**/dbt_packages/
+
+# Airflow generated files
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+airflow/standalone_admin_password.txt
+airflow/.env
+airflow/config/.user.yml

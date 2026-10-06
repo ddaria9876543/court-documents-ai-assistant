@@ -1,0 +1,13 @@
+court_documents_analytics:
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_HOST') }}"
+      port: 55432
+      user: postgres
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: court_docs
+      schema: analytics
+      threads: 4
+
+  target: dev

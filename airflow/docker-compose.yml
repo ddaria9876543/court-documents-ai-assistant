@@ -1,0 +1,136 @@
+services:
+  airflow-postgres:
+    image: postgres:16
+    container_name: court_docs_airflow_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  airflow-init:
+    build:
+      context: ..
+      dockerfile: airflow/Dockerfile
+    container_name: court_docs_airflow_init
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8081
+      AIRFLOW__CORE__HOSTNAME_CALLABLE: socket:gethostname
+
+      PROJECT_ROOT: /opt/project
+
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:55432/${POSTGRES_DB}
+
+      DBT_HOST: host.docker.internal
+      DBT_PROFILES_DIR: /opt/airflow/dbt_profiles
+    volumes:
+      - ..:/opt/project
+      - ./dags:/opt/airflow/dags
+      - ./config:/opt/airflow/dbt_profiles
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create
+      --username admin
+      --password admin
+      --firstname Admin
+      --lastname User
+      --role Admin
+      --email admin@example.com
+      || true
+      "
+
+  airflow-webserver:
+    build:
+      context: ..
+      dockerfile: airflow/Dockerfile
+    container_name: court_docs_airflow_webserver
+    restart: unless-stopped
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+
+      PROJECT_ROOT: /opt/project
+
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:55432/${POSTGRES_DB}
+      DBT_HOST: host.docker.internal
+      DBT_PROFILES_DIR: /opt/airflow/dbt_profiles
+    volumes:
+      - ..:/opt/project
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./config:/opt/airflow/dbt_profiles
+    ports:
+      - "8081:8080"
+    command: webserver
+
+  airflow-scheduler:
+    build:
+      context: ..
+      dockerfile: airflow/Dockerfile
+    container_name: court_docs_airflow_scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8081
+      AIRFLOW__CORE__HOSTNAME_CALLABLE: socket:gethostname
+
+      PROJECT_ROOT: /opt/project
+
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:55432/${POSTGRES_DB}
+
+      DBT_HOST: host.docker.internal
+      DBT_PROFILES_DIR: /opt/airflow/dbt_profiles
+    volumes:
+      - ..:/opt/project
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./config:/opt/airflow/dbt_profiles
+    command: scheduler
+
+volumes:
+  airflow_postgres_data:
