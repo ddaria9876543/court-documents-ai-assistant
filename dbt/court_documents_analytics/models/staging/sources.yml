@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: court_docs
+    database: court_docs
+    schema: public
+
+    tables:
+      - name: documents
+      - name: document_files
+      - name: document_history
+      - name: stg_document_extractions
+      - name: processing_events

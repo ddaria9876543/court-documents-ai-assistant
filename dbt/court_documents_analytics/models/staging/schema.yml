@@ -1,0 +1,90 @@
+version: 2
+
+models:
+  - name: stg_documents
+    description: "Operational documents prepared for analytics."
+
+    columns:
+      - name: document_id
+        tests:
+          - not_null
+          - unique
+
+      - name: status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - new
+                  - processing
+                  - processed
+                  - needs_review
+                  - error
+                  - sent
+
+  - name: stg_document_extractions
+    description: "Staging extraction results with processing attempts."
+
+    columns:
+      - name: extraction_id
+        tests:
+          - not_null
+          - unique
+
+      - name: document_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_documents')
+                field: document_id
+
+      - name: attempt
+        tests:
+          - not_null
+
+      - name: processing_status
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - ok
+                  - unclear
+                  - invalid
+                  - conflict
+                  - multiple_values
+                  - not_found
+                  - warning
+                  - needs_review
+                  - error
+
+  - name: stg_processing_events
+    description: "Technical processing events used for pipeline monitoring."
+
+    columns:
+      - name: event_id
+        tests:
+          - not_null
+          - unique
+
+      - name: document_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_documents')
+                field: document_id
+
+      - name: attempt
+        tests:
+          - not_null
+
+      - name: event_type
+        tests:
+          - not_null
+
+      - name: status
+        tests:
+          - not_null

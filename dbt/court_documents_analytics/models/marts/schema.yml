@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: mart_document_processing_daily
+    columns:
+      - name: date
+        tests:
+          - not_null
+          - unique
+
+      - name: documents_received
+        tests:
+          - not_null
+
+      - name: success_rate
+        tests:
+          - not_null
+
+  - name: mart_document_quality
+    columns:
+      - name: date
+        tests:
+          - not_null
+          - unique
+
+      - name: documents_total
+        tests:
+          - not_null
+
+      - name: quality_rate
+        tests:
+          - not_null
+
+  - name: mart_document_types
+    columns:
+      - name: document_type
+        tests:
+          - not_null
+          - unique
+
+      - name: documents_count
+        tests:
+          - not_null
+
+  - name: mart_legal_actions
+    columns:
+      - name: date
+        tests:
+          - not_null
+
+      - name: document_type
+        tests:
+          - not_null
+
+      - name: documents_total
+        tests:
+          - not_null
