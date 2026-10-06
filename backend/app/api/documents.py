@@ -79,6 +79,7 @@ from app.services.document_service import (
 )
 
 from app.services.storage_service import storage_service
+from app.services.kafka_service import kafka_producer
 
 from app.services.file_service import (
 
@@ -739,133 +740,60 @@ async def upload_documents(
             db.refresh(document)
 
 
-
             # --------------------------------------------------
-
-            # 7. Каждый файл отправляем в processing отдельно
-
+            # 7. Отправляем документ в очередь обработки
             #
-
-            # PDF -> PDF pipeline
-
-            # XML -> XML pipeline
-
-            #
-
-            # build_api_result сам определяет формат
-
-            # по переданному файлу.
-
+            # Сам OCR / LLM здесь больше не запускается.
+            # HTTP endpoint только сохраняет исходный документ
+            # и ставит задачу в Kafka.
             # --------------------------------------------------
-
-
 
             try:
-
-                processing_result = (
-
-                    build_api_result(
-
-                        saved_path
-
-                    )
-
+                kafka_producer.publish_document_processing(
+                    document_id=document.id,
+                    object_name=object_name,
+                    original_filename=(
+                        file.filename or ""
+                    ),
+                    file_format=(
+                        extension.lstrip(".")
+                    ),
                 )
 
-
-
-                document = (
-
-                    apply_processing_result(
-
-                        db=db,
-
-                        document=document,
-
-                        result=processing_result,
-
-                    )
-
-                )
-
-
-
-            except Exception as processing_exc:
-
-                # Ошибка обработки конкретного файла
-
-                # НЕ должна ронять остальные файлы.
-
-
-
-                db.rollback()
-
-
-
+            except Exception as kafka_exc:
                 try:
-
                     document.status = "error"
 
-
-
                     history = DocumentHistory(
-
                         document_id=document.id,
-
-                        event_type="processing_error",
-
+                        event_type="queue_error",
                         message=(
-
-                            "Document processing failed: "
-
-                            f"{processing_exc}"
-
+                            "Failed to publish document "
+                            "processing event: "
+                            f"{kafka_exc}"
                         ),
-
                     )
-
-
 
                     db.add(history)
-
                     db.commit()
-
                     db.refresh(document)
 
-
-
                 except Exception:
-
                     db.rollback()
 
-
-
                 errors.append(
-
                     UploadErrorResponse(
-
                         filename=(
-
                             file.filename or ""
-
                         ),
-
                         error=(
-
-                            "Processing error: "
-
-                            f"{processing_exc}"
-
+                            "Queue error: "
+                            f"{kafka_exc}"
                         ),
-
                     )
-
                 )
 
-
-
                 continue
-
 
 
             # --------------------------------------------------

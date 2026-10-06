@@ -1,4 +1,6 @@
 from io import BytesIO
+from pathlib import Path
+import tempfile
 
 from minio import Minio
 
@@ -13,11 +15,16 @@ class StorageService:
             secret_key=settings.MINIO_SECRET_KEY,
             secure=settings.MINIO_SECURE,
         )
+
         self.bucket = settings.MINIO_BUCKET
 
     def ensure_bucket(self) -> None:
-        if not self.client.bucket_exists(self.bucket):
-            self.client.make_bucket(self.bucket)
+        if not self.client.bucket_exists(
+            self.bucket
+        ):
+            self.client.make_bucket(
+                self.bucket
+            )
 
     def upload_bytes(
         self,
@@ -36,6 +43,38 @@ class StorageService:
         )
 
         return object_name
+
+    def download_to_temp(
+        self,
+        object_name: str,
+        suffix: str = "",
+    ) -> Path:
+        self.ensure_bucket()
+
+        temp_file = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=suffix,
+        )
+
+        temp_path = Path(
+            temp_file.name
+        )
+
+        temp_file.close()
+
+        try:
+            self.client.fget_object(
+                bucket_name=self.bucket,
+                object_name=object_name,
+                file_path=str(temp_path),
+            )
+        except Exception:
+            if temp_path.exists():
+                temp_path.unlink()
+
+            raise
+
+        return temp_path
 
 
 storage_service = StorageService()

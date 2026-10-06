@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str = "minioadmin"
     MINIO_BUCKET: str = "court-documents"
     MINIO_SECURE: bool = False
-
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_DOCUMENT_TOPIC: str = "document.processing"
+    KAFKA_DLQ_TOPIC: str = "document.processing.dlq"
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
