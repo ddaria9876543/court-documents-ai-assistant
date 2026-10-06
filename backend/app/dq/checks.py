@@ -255,7 +255,197 @@ def check_errors_without_message(
             "должен содержать error_message"
         ),
     )
+import re
+from datetime import datetime
 
+
+def check_invalid_inn(
+    db: Session,
+) -> DQResult:
+    values = db.scalars(
+        select(
+            StgDocumentExtraction.inn
+        ).where(
+            StgDocumentExtraction.inn.is_not(None)
+        )
+    ).all()
+
+    failed_rows = 0
+
+    for value in values:
+        normalized = re.sub(
+            r"\D",
+            "",
+            value,
+        )
+
+        if len(normalized) not in (10, 12):
+            failed_rows += 1
+
+    return DQResult(
+        check_name="invalid_inn",
+        passed=failed_rows == 0,
+        failed_rows=failed_rows,
+        description=(
+            "ИНН должен содержать "
+            "10 или 12 цифр"
+        ),
+    )
+
+
+def check_invalid_snils(
+    db: Session,
+) -> DQResult:
+    values = db.scalars(
+        select(
+            StgDocumentExtraction.snils
+        ).where(
+            StgDocumentExtraction.snils.is_not(None)
+        )
+    ).all()
+
+    failed_rows = 0
+
+    for value in values:
+        normalized = re.sub(
+            r"\D",
+            "",
+            value,
+        )
+
+        if len(normalized) != 11:
+            failed_rows += 1
+
+    return DQResult(
+        check_name="invalid_snils",
+        passed=failed_rows == 0,
+        failed_rows=failed_rows,
+        description=(
+            "СНИЛС должен содержать 11 цифр"
+        ),
+    )
+
+
+def is_valid_iso_date(
+    value: str | None,
+) -> bool:
+    if value is None:
+        return True
+
+    try:
+        datetime.strptime(
+            value,
+            "%Y-%m-%d",
+        )
+        return True
+    except ValueError:
+        return False
+
+
+def check_invalid_dates(
+    db: Session,
+) -> DQResult:
+    rows = db.scalars(
+        select(
+            StgDocumentExtraction
+        )
+    ).all()
+
+    failed_rows = 0
+
+    for row in rows:
+        dates = [
+            row.case_date,
+            row.birth_date,
+            row.debt_period_start,
+            row.debt_period_end,
+        ]
+
+        if any(
+            not is_valid_iso_date(value)
+            for value in dates
+        ):
+            failed_rows += 1
+
+    return DQResult(
+        check_name="invalid_dates",
+        passed=failed_rows == 0,
+        failed_rows=failed_rows,
+        description=(
+            "Дата должна быть в формате YYYY-MM-DD"
+        ),
+    )
+
+
+def check_debt_period_consistency(
+    db: Session,
+) -> DQResult:
+    rows = db.scalars(
+        select(
+            StgDocumentExtraction
+        ).where(
+            StgDocumentExtraction.debt_period_start.is_not(None),
+            StgDocumentExtraction.debt_period_end.is_not(None),
+        )
+    ).all()
+
+    failed_rows = 0
+
+    for row in rows:
+        if (
+            not is_valid_iso_date(row.debt_period_start)
+            or not is_valid_iso_date(row.debt_period_end)
+        ):
+            continue
+
+        start = datetime.strptime(
+            row.debt_period_start,
+            "%Y-%m-%d",
+        )
+
+        end = datetime.strptime(
+            row.debt_period_end,
+            "%Y-%m-%d",
+        )
+
+        if start > end:
+            failed_rows += 1
+
+    return DQResult(
+        check_name="invalid_debt_period",
+        passed=failed_rows == 0,
+        failed_rows=failed_rows,
+        description=(
+            "Начало периода задолженности "
+            "не может быть позже окончания"
+        ),
+    )
+
+
+def check_missing_case_number(
+    db: Session,
+) -> DQResult:
+    failed_rows = db.scalar(
+        select(
+            func.count(
+                StgDocumentExtraction.id
+            )
+        ).where(
+            StgDocumentExtraction.processing_status
+            == "ok",
+            StgDocumentExtraction.case_number.is_(None),
+        )
+    ) or 0
+
+    return DQResult(
+        check_name="missing_case_number",
+        passed=failed_rows == 0,
+        failed_rows=failed_rows,
+        description=(
+            "У успешно обработанного документа "
+            "должен быть номер дела"
+        ),
+    )
 
 def run_data_quality_checks(
     db: Session,
@@ -269,6 +459,11 @@ def run_data_quality_checks(
         check_duplicate_processing_attempts,
         check_negative_event_duration,
         check_errors_without_message,
+        check_invalid_inn,
+        check_invalid_snils,
+        check_invalid_dates,
+        check_debt_period_consistency,
+        check_missing_case_number,
     ]
 
     return [
