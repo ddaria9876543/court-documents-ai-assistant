@@ -1,9 +1,10 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.document import Document
 from app.models.document_file import DocumentFile
 from app.models.document_history import DocumentHistory
+from app.models.stg_document_extraction import StgDocumentExtraction
 
 
 WARNING_LABELS = {
@@ -167,6 +168,16 @@ def create_document(
     return document
 
 
+def to_float_or_none(value):
+    if value in (None, ""):
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def apply_processing_result(
     db: Session,
     document: Document,
@@ -174,7 +185,7 @@ def apply_processing_result(
 ) -> Document:
     """
     Сохраняет результат document_processing
-    в запись документа.
+    в staging-слой и operational-запись документа.
 
     Разделяем:
 
@@ -262,18 +273,9 @@ def apply_processing_result(
         )
     )
 
-    try:
-        document.amount = (
-            float(amount)
-            if amount is not None
-            else None
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
-        document.amount = None
+    document.amount = to_float_or_none(
+        amount
+    )
 
     # ========================================
     # Техническая ручная проверка
@@ -306,6 +308,160 @@ def apply_processing_result(
         )
         or []
     )
+
+    # ========================================
+    # STAGING LAYER
+    # ========================================
+
+    last_attempt = db.scalar(
+        select(
+            func.max(
+                StgDocumentExtraction.attempt
+            )
+        ).where(
+            StgDocumentExtraction.document_id
+            == document.id
+        )
+    )
+
+    next_attempt = (
+        (last_attempt or 0) + 1
+    )
+
+    staging_result = StgDocumentExtraction(
+        document_id=document.id,
+        attempt=next_attempt,
+
+        document_type=(
+            result.get("document_type")
+            or get_field_value(
+                fields,
+                "document_type",
+            )
+        ),
+
+        case_number=(
+            result.get("case_number")
+            or get_field_value(
+                fields,
+                "case_number",
+            )
+        ),
+
+        case_date=get_field_value(
+            fields,
+            "case_date",
+        ),
+
+        debt_period_start=get_field_value(
+            fields,
+            "debt_period_start",
+        ),
+
+        debt_period_end=get_field_value(
+            fields,
+            "debt_period_end",
+        ),
+
+        full_name=(
+            result.get("debtor")
+            or get_field_value(
+                fields,
+                "full_name",
+            )
+        ),
+
+        birth_date=get_field_value(
+            fields,
+            "birth_date",
+        ),
+
+        passport=get_field_value(
+            fields,
+            "passport",
+        ),
+
+        snils=get_field_value(
+            fields,
+            "snils",
+        ),
+
+        inn=get_field_value(
+            fields,
+            "inn",
+        ),
+
+        street=get_field_value(
+            fields,
+            "street",
+        ),
+
+        house=get_field_value(
+            fields,
+            "house",
+        ),
+
+        apartment=get_field_value(
+            fields,
+            "apartment",
+        ),
+
+        principal_debt=to_float_or_none(
+            get_field_value(
+                fields,
+                "principal_debt",
+            )
+        ),
+
+        penalty_amount=to_float_or_none(
+            get_field_value(
+                fields,
+                "penalty_amount",
+            )
+        ),
+
+        state_duty=to_float_or_none(
+            get_field_value(
+                fields,
+                "state_duty",
+            )
+        ),
+
+        postal_cost=to_float_or_none(
+            get_field_value(
+                fields,
+                "postal_cost",
+            )
+        ),
+
+        processing_status=str(
+            processing_status
+        ),
+
+        missing_fields=missing_fields,
+        warnings=warnings,
+
+        # Полный исходный processing-result.
+        # Нужен для lineage, отладки и повторной обработки.
+        raw_result=result,
+
+        # Если processing pipeline передал точное
+        # название модели — сохраняем его.
+        # Если нет — оставляем NULL.
+        model_name=result.get(
+            "model_name"
+        ),
+
+        processor_version=result.get(
+            "processor_version"
+        ),
+    )
+
+    db.add(staging_result)
+
+    # ========================================
+    # Operational status
+    # ========================================
 
     needs_review = (
         processing_status
@@ -412,7 +568,10 @@ def apply_processing_result(
 
         db.add(legal_history)
 
+    # Staging + Document + History
+    # записываются одной транзакцией.
     db.commit()
+
     db.refresh(document)
 
     return document
@@ -433,7 +592,9 @@ def attach_file_to_document(
     к уже созданному документу.
 
     Например:
+
     XML -> источник данных для обработки
+
     PDF -> оригинал для просмотра.
     """
 
