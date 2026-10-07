@@ -38,3 +38,5 @@ airflow/config/.user.yml
 minio/minio-src/
 minio/.env
 minio/minio-src/
+all_test_files.txt
+exports/
