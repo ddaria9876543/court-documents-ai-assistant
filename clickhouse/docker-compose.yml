@@ -1,0 +1,22 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: court_docs_clickhouse
+
+    environment:
+      CLICKHOUSE_DB: court_docs_analytics
+      CLICKHOUSE_USER: analytics
+      CLICKHOUSE_PASSWORD: analytics_dev
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+
+    ports:
+      - "8123:8123"
+      - "9002:9000"
+
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+    restart: unless-stopped
+
+volumes:
+  clickhouse_data:
