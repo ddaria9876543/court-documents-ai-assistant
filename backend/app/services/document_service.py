@@ -35,7 +35,6 @@ TECHNICAL_REVIEW_STATUSES = {
     "needs_review",
 }
 
-
 def get_field_value(
     fields: dict,
     field_name: str,
@@ -57,16 +56,28 @@ def get_field_value(
             "status": "ok",
         }
     }
+
+    Строковые псевдо-null значения нормализуются в настоящий None.
     """
 
     value = fields.get(field_name)
 
     if isinstance(value, dict):
-        return value.get("value")
+        value = value.get("value")
+
+    if isinstance(value, str):
+        value = value.strip()
+
+        if value.lower() in {
+            "",
+            "null",
+            "none",
+            "nan",
+            "n/a",
+        }:
+            return None
 
     return value
-
-
 def format_review_reason(
     warnings: list[str],
     missing_fields: list[str] | None = None,
