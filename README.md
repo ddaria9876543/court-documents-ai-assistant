@@ -1,93 +1,448 @@
-# template-gitlab-644fb040
+# Court Documents AI & Data Engineering Platform
 
-Template for task: GitLab репозиторий
+End-to-end data platform for automated processing, validation and analytics of court and enforcement documents.
 
-## Getting started
+The project started as an OCR/LLM assistant for processing judicial documents and was later extended into a full Data Engineering pipeline with event-driven ingestion, object storage, analytical transformations, data quality checks, orchestration and BI reporting.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Overview
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+The system processes PDF scans, text-based PDFs and XML documents, extracts structured information and builds analytical data marts for monitoring document processing quality and operational metrics.
 
-## Add your files
+Core workflow:
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
-
+```text
+Document Upload
+      ↓
+   FastAPI
+      ↓
+    MinIO
+      ↓
+Kafka / Redpanda
+      ↓
+Processing Worker
+      ↓
+ OCR / XML / LLM
+      ↓
+ PostgreSQL
+      ↓
+Data Quality Checks
+      ↓
+     dbt
+      ↓
+ ClickHouse
+      ↓
+  Yandex DataLens
 ```
-cd existing_repo
-git remote add origin https://git.codenrock.com/codenrock/ii-assistenty/template-gitlab-644fb040.git
-git branch -M main
-git push -uf origin main
+
+Apache Airflow orchestrates the analytical part of the pipeline:
+
+```text
+Data Quality → dbt Build → ClickHouse Sync
 ```
 
-## Integrate with your tools
+## Architecture
 
-- [ ] [Set up project integrations](https://git.codenrock.com/codenrock/ii-assistenty/template-gitlab-644fb040/-/settings/integrations)
+```mermaid
+flowchart LR
+    U[User / React UI] --> API[FastAPI]
 
-## Collaborate with your team
+    API --> S3[MinIO Object Storage]
+    API --> K[Kafka / Redpanda]
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+    K --> W[Processing Worker]
+    S3 --> W
 
-## Test and Deploy
+    W --> OCR[OCR / XML Parser]
+    OCR --> LLM[Qwen LLM]
+    LLM --> PG[(PostgreSQL)]
 
-Use the built-in continuous integration in GitLab.
+    PG --> DQ[Data Quality Checks]
+    DQ --> DBT[dbt]
+    DBT --> CH[(ClickHouse)]
+    CH --> BI[Yandex DataLens]
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+    AF[Apache Airflow] -. orchestrates .-> DQ
+    AF -. orchestrates .-> DBT
+    AF -. orchestrates .-> CH
+```
 
-***
+## Tech Stack
 
-# Editing this README
+### Data Engineering
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+- **PostgreSQL** — operational and staging storage
+- **Apache Kafka / Redpanda** — event-driven document processing
+- **MinIO** — S3-compatible object storage for source documents
+- **dbt** — transformation and analytical data marts
+- **ClickHouse** — analytical OLAP storage
+- **Apache Airflow** — pipeline orchestration
+- **Yandex DataLens** — BI dashboards and visualization
+- **Docker / Docker Compose** — local infrastructure
 
-## Suggestions for a good README
+### Backend and Processing
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+- **Python**
+- **FastAPI**
+- **SQLAlchemy**
+- **PyMuPDF**
+- **Tesseract OCR**
+- **OpenCV**
+- **lxml**
+- **Ollama**
+- **Qwen**
 
-## Name
-Choose a self-explaining name for your project.
+### Frontend
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+- **React**
+- **TypeScript**
+- **Ant Design**
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## Data Pipeline
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+### 1. Ingestion
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+A user uploads a PDF or XML document through the web interface.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+FastAPI:
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+- creates document metadata;
+- stores the original file in MinIO;
+- publishes a `document_uploaded` event to Kafka.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+### 2. Event-driven processing
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+The processing worker consumes messages from Redpanda/Kafka.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+For every document it:
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+1. downloads the source file from MinIO;
+2. extracts text from PDF or XML;
+3. runs OCR for scanned documents;
+4. extracts structured fields using a local LLM;
+5. validates processing results;
+6. stores the result in PostgreSQL.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+The worker implements retries and Dead Letter Queue processing for failed messages.
 
-## License
-For open source projects, say how it is licensed.
+Kafka topics:
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```text
+document.processing
+document.processing.dlq
+```
+
+### 3. Staging layer
+
+Each processing attempt is stored independently in PostgreSQL.
+
+Example fields:
+
+- document type;
+- court case number;
+- case date;
+- debtor information;
+- debt period;
+- principal debt;
+- penalty amount;
+- state duty;
+- processing status;
+- missing fields;
+- validation warnings;
+- model and processing metadata.
+
+This preserves processing history and makes pipeline behavior auditable.
+
+## Data Quality
+
+Before analytical transformations are executed, the pipeline runs automated Data Quality checks.
+
+Currently implemented checks include:
+
+- duplicate source files;
+- invalid document statuses;
+- processed documents without document type;
+- negative monetary values;
+- invalid processing statuses;
+- duplicate processing attempts;
+- negative event duration;
+- processing errors without an error message;
+- invalid INN;
+- invalid SNILS;
+- invalid date formats;
+- invalid debt periods;
+- missing case numbers.
+
+Current pipeline:
+
+```text
+13 Data Quality checks
+```
+
+A failed critical check stops downstream analytical processing.
+
+## dbt Transformation Layer
+
+dbt transforms operational PostgreSQL data into analytical models.
+
+### Staging models
+
+```text
+stg_documents
+stg_document_extractions
+stg_processing_events
+```
+
+### Intermediate layer
+
+```text
+int_documents_enriched
+```
+
+### Data marts
+
+```text
+mart_document_processing_daily
+mart_document_quality
+mart_document_types
+mart_legal_actions
+```
+
+The marts provide metrics for document throughput, processing quality, document types and legal-action routing.
+
+## ClickHouse Analytics Layer
+
+The resulting marts are synchronized into ClickHouse for analytical workloads.
+
+Examples of available metrics:
+
+- number of received documents;
+- successfully processed documents;
+- failed documents;
+- documents requiring manual review;
+- processing success rate;
+- extraction quality rate;
+- processing time;
+- distribution by document type;
+- debt amounts;
+- documents requiring legal action.
+
+## Airflow Orchestration
+
+Apache Airflow controls the analytical pipeline.
+
+DAG:
+
+```text
+document_analytics_pipeline
+```
+
+Execution flow:
+
+```text
+run_python_dq
+      ↓
+dbt_build
+      ↓
+sync_clickhouse
+```
+
+A dbt build or ClickHouse synchronization is executed only after Data Quality validation succeeds.
+
+## BI Dashboard
+
+Yandex DataLens is used to visualize analytical marts.
+
+The dashboard contains:
+
+- processing success rate;
+- extraction quality rate;
+- documents requiring manual review;
+- document volume over time;
+- distribution by document type;
+- data quality issues;
+- review rate by document type;
+- documents requiring legal work.
+
+![Analytics Dashboard](docs/images/dashboard.png)
+
+## Airflow DAG
+
+The analytical workflow is orchestrated through Apache Airflow.
+
+![Airflow DAG](docs/images/airflow.png)
+
+## Event Streaming
+
+Redpanda provides Kafka-compatible event streaming for asynchronous document processing.
+
+![Redpanda](docs/images/redpanda.png)
+
+## Web Interface
+
+The React interface allows users to upload documents, monitor processing status and inspect extracted information.
+
+![Web Interface](docs/images/web-ui.png)
+
+## Reliability Features
+
+The pipeline includes:
+
+- asynchronous event-driven processing;
+- manual Kafka offset commits;
+- retry handling;
+- Dead Letter Queue;
+- immutable processing attempts;
+- Data Quality gates;
+- dbt tests;
+- document status tracking;
+- object storage for original files;
+- analytical separation between PostgreSQL and ClickHouse.
+
+## Repository Structure
+
+```text
+.
+├── airflow/
+│   └── dags/
+│       └── document_analytics_pipeline.py
+│
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   ├── models/
+│   │   ├── services/
+│   │   └── workers/
+│   └── run_dq_checks.py
+│
+├── clickhouse/
+│   ├── docker-compose.yml
+│   ├── init.sql
+│   └── sync_marts.py
+│
+├── dbt/
+│   └── court_documents_analytics/
+│
+├── document_processing/
+│
+├── frontend/
+│
+├── minio/
+│
+├── redpanda/
+│   └── docker-compose.yml
+│
+└── docs/
+    └── images/
+```
+
+## Local Services
+
+The platform runs locally using Docker and development services.
+
+| Service | Port |
+|---|---:|
+| React frontend | 5173 |
+| FastAPI | 8000 |
+| PostgreSQL | 55432 |
+| MinIO API | 9000 |
+| MinIO Console | 9001 |
+| Redpanda Kafka | 9092 |
+| Redpanda Console | 8083 |
+| Airflow | 8081 |
+| ClickHouse HTTP | 8123 |
+| ClickHouse Native | 9002 |
+
+## Example Data Flow
+
+```text
+ocr_014.pdf
+    ↓
+FastAPI upload
+    ↓
+MinIO object
+    ↓
+document_uploaded Kafka event
+    ↓
+Processing Worker
+    ↓
+OCR + Qwen extraction
+    ↓
+PostgreSQL staging
+    ↓
+Data Quality
+    ↓
+dbt marts
+    ↓
+ClickHouse
+    ↓
+DataLens
+```
+
+## Document Processing
+
+Supported document sources include:
+
+- scanned PDF documents;
+- PDFs with text layer;
+- XML enforcement documents.
+
+Supported document categories include:
+
+- court orders;
+- writs of execution;
+- enforcement service decisions.
+
+The processing layer extracts structured fields and determines whether a document can be processed automatically or requires manual review.
+
+## Project Background
+
+The original MVP was developed for the **Inter RAO AI Assistants for Energy Hackathon** in the court-document processing track.
+
+The initial solution focused on OCR, document classification and structured field extraction.
+
+The project was subsequently expanded as a Data Engineering portfolio project with:
+
+- Kafka-based event streaming;
+- MinIO object storage;
+- PostgreSQL staging and processing history;
+- automated Data Quality checks;
+- dbt transformations;
+- ClickHouse analytical storage;
+- Airflow orchestration;
+- DataLens dashboards.
+
+## Key Engineering Concepts Demonstrated
+
+This project demonstrates practical experience with:
+
+- ETL / ELT pipelines;
+- event-driven architecture;
+- message queues;
+- object storage;
+- OLTP and OLAP databases;
+- dimensional analytical layers;
+- data quality validation;
+- workflow orchestration;
+- retry and DLQ patterns;
+- dbt transformations and testing;
+- BI analytics;
+- containerized infrastructure.
+
+## Status
+
+The end-to-end local pipeline is operational:
+
+```text
+Upload
+→ Object Storage
+→ Kafka
+→ Worker
+→ OCR / LLM
+→ PostgreSQL
+→ Data Quality
+→ dbt
+→ ClickHouse
+→ DataLens
+```
+
+The project is being developed further as a Data Engineering portfolio project.
