@@ -40,3 +40,6 @@ minio/.env
 minio/minio-src/
 all_test_files.txt
 exports/
+
+desktop.ini
+Thumbs.db
