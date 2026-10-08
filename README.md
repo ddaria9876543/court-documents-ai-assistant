@@ -1,50 +1,50 @@
-# Court Documents AI & Data Engineering Platform
+# Платформа обработки и аналитики судебных документов
 
-End-to-end data platform for automated processing, validation and analytics of court and enforcement documents.
+End-to-end Data Engineering платформа для автоматической обработки, проверки качества и аналитики судебных и исполнительных документов.
 
-The project started as an OCR/LLM assistant for processing judicial documents and was later extended into a full Data Engineering pipeline with event-driven ingestion, object storage, analytical transformations, data quality checks, orchestration and BI reporting.
+Проект начинался как OCR/LLM-ассистент для обработки судебных документов, а затем был расширен до полноценного Data Engineering пайплайна с событийной архитектурой, объектным хранилищем, аналитическими витринами, Data Quality проверками, оркестрацией и BI-дашбордом.
 
-## Overview
+## О проекте
 
-The system processes PDF scans, text-based PDFs and XML documents, extracts structured information and builds analytical data marts for monitoring document processing quality and operational metrics.
+Система принимает PDF и XML документы, распознаёт и извлекает из них структурированные данные, сохраняет историю обработки и формирует аналитические витрины для мониторинга качества и статусов обработки.
 
-Core workflow:
+Основной поток данных:
 
 ```text
-Document Upload
-      ↓
-   FastAPI
-      ↓
-    MinIO
-      ↓
+Загрузка документа
+        ↓
+     FastAPI
+        ↓
+      MinIO
+        ↓
 Kafka / Redpanda
-      ↓
+        ↓
 Processing Worker
-      ↓
+        ↓
  OCR / XML / LLM
-      ↓
- PostgreSQL
-      ↓
-Data Quality Checks
-      ↓
-     dbt
-      ↓
- ClickHouse
-      ↓
-  Yandex DataLens
+        ↓
+   PostgreSQL
+        ↓
+ Data Quality
+        ↓
+       dbt
+        ↓
+   ClickHouse
+        ↓
+Yandex DataLens
 ```
 
-Apache Airflow orchestrates the analytical part of the pipeline:
+Apache Airflow оркестрирует аналитическую часть пайплайна:
 
 ```text
 Data Quality → dbt Build → ClickHouse Sync
 ```
 
-## Architecture
+## Архитектура
 
 ```mermaid
 flowchart LR
-    U[User / React UI] --> API[FastAPI]
+    U[Пользователь / React UI] --> API[FastAPI]
 
     API --> S3[MinIO Object Storage]
     API --> K[Kafka / Redpanda]
@@ -61,25 +61,25 @@ flowchart LR
     DBT --> CH[(ClickHouse)]
     CH --> BI[Yandex DataLens]
 
-    AF[Apache Airflow] -. orchestrates .-> DQ
-    AF -. orchestrates .-> DBT
-    AF -. orchestrates .-> CH
+    AF[Apache Airflow] -. оркестрация .-> DQ
+    AF -. оркестрация .-> DBT
+    AF -. оркестрация .-> CH
 ```
 
-## Tech Stack
+## Технологический стек
 
 ### Data Engineering
 
-- **PostgreSQL** — operational and staging storage
-- **Apache Kafka / Redpanda** — event-driven document processing
-- **MinIO** — S3-compatible object storage for source documents
-- **dbt** — transformation and analytical data marts
-- **ClickHouse** — analytical OLAP storage
-- **Apache Airflow** — pipeline orchestration
-- **Yandex DataLens** — BI dashboards and visualization
-- **Docker / Docker Compose** — local infrastructure
+- **PostgreSQL** — операционное и staging-хранилище
+- **Apache Kafka / Redpanda** — событийная обработка документов
+- **MinIO** — S3-совместимое объектное хранилище
+- **dbt** — трансформация данных и построение витрин
+- **ClickHouse** — аналитическое OLAP-хранилище
+- **Apache Airflow** — оркестрация пайплайнов
+- **Yandex DataLens** — BI и визуализация данных
+- **Docker / Docker Compose** — локальная инфраструктура
 
-### Backend and Processing
+### Backend и обработка документов
 
 - **Python**
 - **FastAPI**
@@ -97,32 +97,32 @@ flowchart LR
 - **TypeScript**
 - **Ant Design**
 
-## Data Pipeline
+## Как работает пайплайн
 
 ### 1. Ingestion
 
-A user uploads a PDF or XML document through the web interface.
+Пользователь загружает PDF или XML документ через веб-интерфейс.
 
 FastAPI:
 
-- creates document metadata;
-- stores the original file in MinIO;
-- publishes a `document_uploaded` event to Kafka.
+- создаёт метаданные документа;
+- сохраняет исходный файл в MinIO;
+- публикует событие `document_uploaded` в Kafka.
 
-### 2. Event-driven processing
+### 2. Асинхронная обработка
 
-The processing worker consumes messages from Redpanda/Kafka.
+Processing Worker читает сообщения из Redpanda/Kafka.
 
-For every document it:
+Для каждого документа он:
 
-1. downloads the source file from MinIO;
-2. extracts text from PDF or XML;
-3. runs OCR for scanned documents;
-4. extracts structured fields using a local LLM;
-5. validates processing results;
-6. stores the result in PostgreSQL.
+1. скачивает исходный файл из MinIO;
+2. извлекает текст из PDF или XML;
+3. запускает OCR для сканированных документов;
+4. извлекает структурированные поля с помощью локальной LLM;
+5. валидирует результат;
+6. сохраняет данные в PostgreSQL.
 
-The worker implements retries and Dead Letter Queue processing for failed messages.
+Для ошибочных сообщений реализованы retry и Dead Letter Queue.
 
 Kafka topics:
 
@@ -131,58 +131,61 @@ document.processing
 document.processing.dlq
 ```
 
-### 3. Staging layer
+## Staging-слой
 
-Each processing attempt is stored independently in PostgreSQL.
+Каждая попытка обработки сохраняется отдельно в PostgreSQL.
 
-Example fields:
+Это позволяет хранить историю обработки и анализировать результаты повторных запусков.
 
-- document type;
-- court case number;
-- case date;
-- debtor information;
-- debt period;
-- principal debt;
-- penalty amount;
-- state duty;
-- processing status;
-- missing fields;
-- validation warnings;
-- model and processing metadata.
+Основные поля:
 
-This preserves processing history and makes pipeline behavior auditable.
+- тип документа;
+- номер дела;
+- дата дела;
+- данные должника;
+- период задолженности;
+- основной долг;
+- пени;
+- госпошлина;
+- статус обработки;
+- отсутствующие поля;
+- предупреждения;
+- информация о модели;
+- время обработки.
 
 ## Data Quality
 
-Before analytical transformations are executed, the pipeline runs automated Data Quality checks.
+Перед построением аналитических витрин выполняются автоматические проверки качества данных.
 
-Currently implemented checks include:
+Реализовано 13 Data Quality проверок:
 
-- duplicate source files;
-- invalid document statuses;
-- processed documents without document type;
-- negative monetary values;
-- invalid processing statuses;
-- duplicate processing attempts;
-- negative event duration;
-- processing errors without an error message;
-- invalid INN;
-- invalid SNILS;
-- invalid date formats;
-- invalid debt periods;
-- missing case numbers.
+- дубликаты исходных файлов;
+- некорректные статусы документов;
+- обработанные документы без типа;
+- отрицательные денежные значения;
+- некорректные processing statuses;
+- дубли processing attempts;
+- отрицательная длительность обработки;
+- ошибки обработки без error message;
+- некорректный ИНН;
+- некорректный СНИЛС;
+- некорректный формат дат;
+- неправильный период задолженности;
+- отсутствие номера дела у успешно обработанного документа.
 
-Current pipeline:
+Если критическая проверка не проходит, дальнейшая аналитическая обработка останавливается.
+
+Пример успешного запуска:
 
 ```text
-13 Data Quality checks
+Checks total: 13
+Checks failed: 0
+DATA QUALITY PASSED
 ```
 
-A failed critical check stops downstream analytical processing.
+## dbt слой
 
-## dbt Transformation Layer
-
-dbt transforms operational PostgreSQL data into analytical models.
+dbt используется для преобразования операционных данных PostgreSQL в аналитические модели.
 
 ### Staging models
 
@@ -207,28 +210,39 @@ mart_document_types
 mart_legal_actions
 ```
 
-The marts provide metrics for document throughput, processing quality, document types and legal-action routing.
+Витрины используются для анализа:
 
-## ClickHouse Analytics Layer
+- количества поступающих документов;
+- успешности обработки;
+- качества извлечения;
+- типов документов;
+- количества ошибок;
+- документов на ручной проверке;
+- документов, требующих работы юриста;
+- сумм задолженности.
 
-The resulting marts are synchronized into ClickHouse for analytical workloads.
+## ClickHouse
 
-Examples of available metrics:
+После выполнения dbt аналитические витрины синхронизируются в ClickHouse.
 
-- number of received documents;
-- successfully processed documents;
-- failed documents;
-- documents requiring manual review;
-- processing success rate;
-- extraction quality rate;
-- processing time;
-- distribution by document type;
-- debt amounts;
-- documents requiring legal action.
+ClickHouse используется как отдельный аналитический слой для быстрых OLAP-запросов и BI.
 
-## Airflow Orchestration
+Примеры метрик:
 
-Apache Airflow controls the analytical pipeline.
+- количество поступивших документов;
+- количество успешно обработанных документов;
+- количество ошибок;
+- количество документов на проверке;
+- success rate;
+- quality rate;
+- среднее время обработки;
+- распределение по типам документов;
+- сумма задолженности;
+- документы, требующие работы юриста.
+
+## Apache Airflow
+
+Airflow управляет аналитической частью пайплайна.
 
 DAG:
 
@@ -236,7 +250,7 @@ DAG:
 document_analytics_pipeline
 ```
 
-Execution flow:
+Последовательность задач:
 
 ```text
 run_python_dq
@@ -246,59 +260,65 @@ dbt_build
 sync_clickhouse
 ```
 
-A dbt build or ClickHouse synchronization is executed only after Data Quality validation succeeds.
-
-## BI Dashboard
-
-Yandex DataLens is used to visualize analytical marts.
-
-The dashboard contains:
-
-- processing success rate;
-- extraction quality rate;
-- documents requiring manual review;
-- document volume over time;
-- distribution by document type;
-- data quality issues;
-- review rate by document type;
-- documents requiring legal work.
-
-![Analytics Dashboard](docs/images/dashboard.png)
-
-## Airflow DAG
-
-The analytical workflow is orchestrated through Apache Airflow.
+Таким образом, dbt и ClickHouse запускаются только после успешного прохождения Data Quality проверок.
 
 ![Airflow DAG](docs/images/airflow.png)
 
 ## Event Streaming
 
-Redpanda provides Kafka-compatible event streaming for asynchronous document processing.
+Redpanda используется как Kafka-compatible брокер сообщений.
+
+Он позволяет отделить загрузку документа от тяжёлой OCR/LLM обработки и выполнять её асинхронно.
 
 ![Redpanda](docs/images/redpanda.png)
 
-## Web Interface
+## BI-дашборд
 
-The React interface allows users to upload documents, monitor processing status and inspect extracted information.
+Для аналитики используется Yandex DataLens.
+
+Дашборд содержит:
+
+- успешность обработки документов;
+- качество извлечения;
+- количество документов на проверке;
+- динамику поступления документов;
+- распределение по типам;
+- проблемы качества данных;
+- долю документов на проверке;
+- документы, требующие работы юриста.
+
+![Analytics Dashboard](docs/images/dashboard.png)
+
+## Веб-интерфейс
+
+React-интерфейс позволяет:
+
+- загружать документы;
+- отслеживать статус обработки;
+- просматривать список документов;
+- открывать карточку документа;
+- видеть извлечённые данные;
+- работать с документами, требующими ручной проверки.
 
 ![Web Interface](docs/images/web-ui.png)
 
-## Reliability Features
+## Надёжность пайплайна
 
-The pipeline includes:
+В проекте реализованы:
 
-- asynchronous event-driven processing;
-- manual Kafka offset commits;
-- retry handling;
+- асинхронная обработка документов;
+- Kafka consumer;
+- ручной commit offset;
+- retry mechanism;
 - Dead Letter Queue;
-- immutable processing attempts;
+- история попыток обработки;
 - Data Quality gates;
 - dbt tests;
-- document status tracking;
-- object storage for original files;
-- analytical separation between PostgreSQL and ClickHouse.
+- контроль статусов документов;
+- хранение оригинальных файлов в MinIO;
+- разделение OLTP и OLAP слоёв.
 
-## Repository Structure
+## Структура репозитория
 
 ```text
 .
@@ -309,6 +329,7 @@ The pipeline includes:
 ├── backend/
 │   ├── app/
 │   │   ├── api/
+│   │   ├── dq/
 │   │   ├── models/
 │   │   ├── services/
 │   │   └── workers/
@@ -335,11 +356,9 @@ The pipeline includes:
     └── images/
 ```
 
-## Local Services
+## Локальные сервисы
 
-The platform runs locally using Docker and development services.
-
-| Service | Port |
+| Сервис | Порт |
 |---|---:|
 | React frontend | 5173 |
 | FastAPI | 8000 |
@@ -352,89 +371,96 @@ The platform runs locally using Docker and development services.
 | ClickHouse HTTP | 8123 |
 | ClickHouse Native | 9002 |
 
-## Example Data Flow
+## Пример полного Data Flow
 
 ```text
 ocr_014.pdf
     ↓
-FastAPI upload
+FastAPI
     ↓
-MinIO object
+MinIO
     ↓
-document_uploaded Kafka event
+Kafka event
     ↓
 Processing Worker
     ↓
-OCR + Qwen extraction
+OCR + Qwen
     ↓
-PostgreSQL staging
+PostgreSQL
     ↓
 Data Quality
     ↓
-dbt marts
+dbt
     ↓
 ClickHouse
     ↓
 DataLens
 ```
 
-## Document Processing
+## Поддерживаемые документы
 
-Supported document sources include:
+Система работает с:
 
-- scanned PDF documents;
-- PDFs with text layer;
-- XML enforcement documents.
+- PDF со сканами;
+- PDF с текстовым слоем;
+- XML документами ФССП.
 
-Supported document categories include:
+Поддерживаемые типы документов:
 
-- court orders;
-- writs of execution;
-- enforcement service decisions.
+- судебный приказ;
+- исполнительный лист;
+- постановление ФССП.
 
-The processing layer extracts structured fields and determines whether a document can be processed automatically or requires manual review.
+Система также определяет, может ли документ быть обработан автоматически или требует ручной проверки.
 
-## Project Background
+## История проекта
 
-The original MVP was developed for the **Inter RAO AI Assistants for Energy Hackathon** in the court-document processing track.
+Первая версия проекта была разработана в рамках хакатона **«ИИ-ассистенты для энергетики» от Интер РАО** в треке по автоматической обработке судебных документов.
 
-The initial solution focused on OCR, document classification and structured field extraction.
+Изначально MVP решал задачи:
 
-The project was subsequently expanded as a Data Engineering portfolio project with:
+- OCR;
+- классификации документов;
+- извлечения структурированных данных;
+- определения документов, требующих работы юриста.
 
-- Kafka-based event streaming;
-- MinIO object storage;
-- PostgreSQL staging and processing history;
-- automated Data Quality checks;
-- dbt transformations;
-- ClickHouse analytical storage;
-- Airflow orchestration;
-- DataLens dashboards.
+После хакатона проект был расширен до полноценной Data Engineering платформы.
 
-## Key Engineering Concepts Demonstrated
+Были добавлены:
 
-This project demonstrates practical experience with:
+- Kafka / Redpanda;
+- MinIO;
+- PostgreSQL staging layer;
+- Data Quality проверки;
+- dbt;
+- ClickHouse;
+- Airflow;
+- DataLens.
 
-- ETL / ELT pipelines;
-- event-driven architecture;
-- message queues;
-- object storage;
-- OLTP and OLAP databases;
-- dimensional analytical layers;
-- data quality validation;
+## Что демонстрирует проект
+
+Проект показывает практическую работу с:
+
+- ETL / ELT пайплайнами;
+- event-driven архитектурой;
+- брокерами сообщений;
+- объектными хранилищами;
+- OLTP и OLAP базами данных;
+- staging и analytical layers;
+- Data Quality;
 - workflow orchestration;
-- retry and DLQ patterns;
-- dbt transformations and testing;
-- BI analytics;
-- containerized infrastructure.
+- retry / DLQ pattern;
+- dbt transformations;
+- BI-аналитикой;
+- Docker-инфраструктурой.
 
-## Status
+## Статус проекта
 
-The end-to-end local pipeline is operational:
+End-to-end пайплайн работает локально:
 
 ```text
 Upload
-→ Object Storage
+→ MinIO
 → Kafka
 → Worker
 → OCR / LLM
@@ -445,4 +471,4 @@ Upload
 → DataLens
 ```
 
-The project is being developed further as a Data Engineering portfolio project.
+Проект используется как Data Engineering pet-project и продолжает развиваться.
