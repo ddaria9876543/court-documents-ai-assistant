@@ -2898,136 +2898,68 @@ def get_document(
 
 
 
-@router.get(
-
-    "/{document_id}/file"
-
-)
-
+@router.get("/{document_id}/file")
 def get_document_file(
-
     document_id: int,
-
     db: Session = Depends(get_db),
-
 ):
-
     document = db.scalar(
-
         select(Document)
-
-        .options(
-
-            selectinload(
-
-                Document.files
-
-            )
-
-        )
-
-        .where(
-
-            Document.id
-
-            == document_id
-
-        )
-
+        .options(selectinload(Document.files))
+        .where(Document.id == document_id)
     )
-
-
 
     if document is None:
-
         raise HTTPException(
-
             status_code=404,
-
             detail="Document not found",
-
         )
 
-
-
-    display_file = get_display_file(
-
-        document
-
-    )
-
-
+    display_file = get_display_file(document)
 
     if display_file is None:
-
         raise HTTPException(
-
             status_code=404,
-
-            detail=(
-
-                "Document file not found"
-
-            ),
-
+            detail="Document file not found",
         )
-
-
-
-    file_path = Path(
-
-        display_file.file_path
-
-    )
-
-
-
-    if not file_path.exists():
-
-        raise HTTPException(
-
-            status_code=404,
-
-            detail="File not found on disk",
-
-        )
-
-
 
     media_types = {
-
         "pdf": "application/pdf",
-
         "xml": "application/xml",
-
     }
 
-
-
     media_type = media_types.get(
-
         display_file.file_format.lower(),
-
         "application/octet-stream",
-
     )
 
+    try:
+        with storage_service.open_document(
+            file_path=display_file.file_path,
+            file_format=display_file.file_format,
+        ) as file_path:
+            content = file_path.read_bytes()
 
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Document file not found",
+        ) from exc
 
-    return FileResponse(
-        path=file_path,
+    return StreamingResponse(
+        BytesIO(content),
         media_type=media_type,
-        content_disposition_type="inline",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="document_{document_id}.'
+                f'{display_file.file_format.lower()}"'
+            ),
+        },
     )
-
-
-
-
-
 
 
 # ============================================================
-# ПРЕВЬЮ ПЕРВОЙ СТРАНИЦЫ PDF
+# PDF preview
 # ============================================================
 
 @router.get("/{document_id}/preview")
@@ -3061,31 +2993,35 @@ def get_document_preview(
             detail="Preview is available only for PDF files",
         )
 
-    file_path = Path(display_file.file_path)
+    try:
+        with storage_service.open_document(
+            file_path=display_file.file_path,
+            file_format=display_file.file_format,
+        ) as file_path:
 
-    if not file_path.exists():
+            with pymupdf.open(file_path) as pdf_document:
+                if pdf_document.page_count == 0:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="PDF has no pages",
+                    )
+
+                page = pdf_document.load_page(0)
+                pixmap = page.get_pixmap(
+                    matrix=pymupdf.Matrix(1.4, 1.4),
+                    alpha=False,
+                )
+                image_bytes = pixmap.tobytes("png")
+
+    except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
-            detail="File not found on disk",
-        )
-
-    try:
-        with pymupdf.open(file_path) as pdf_document:
-            if pdf_document.page_count == 0:
-                raise HTTPException(
-                    status_code=422,
-                    detail="PDF has no pages",
-                )
-
-            page = pdf_document.load_page(0)
-            pixmap = page.get_pixmap(
-                matrix=pymupdf.Matrix(1.4, 1.4),
-                alpha=False,
-            )
-            image_bytes = pixmap.tobytes("png")
+            detail="Document file not found",
+        ) from exc
 
     except HTTPException:
         raise
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -3102,12 +3038,8 @@ def get_document_preview(
 
 
 # ============================================================
-
-# ПОДТВЕРЖДЕНИЕ ИЗВЛЕЧЁННЫХ ДАННЫХ
-
+# Document verification
 # ============================================================
-
-
 
 @router.put(
 
@@ -3584,32 +3516,6 @@ def send_document_to_responsible(
             detail=(
 
                 "Document file not found"
-
-            ),
-
-        )
-
-
-
-    file_path = Path(
-
-        display_file.file_path
-
-    )
-
-
-
-    if not file_path.exists():
-
-        raise HTTPException(
-
-            status_code=404,
-
-            detail=(
-
-                "Document file not found "
-
-                "on disk"
 
             ),
 
@@ -4121,23 +4027,17 @@ def send_document_to_responsible(
 
     try:
 
-        send_document_email(
-
-            recipient=recipient,
-
-            subject=subject,
-
-            body=body,
-
-            attachment_path=file_path,
-
-            attachment_name=(
-
-                original_filename
-
-            ),
-
-        )
+        with storage_service.open_document(
+            file_path=display_file.file_path,
+            file_format=display_file.file_format,
+        ) as attachment_path:
+            send_document_email(
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                attachment_path=attachment_path,
+                attachment_name=original_filename,
+            )
 
 
 

@@ -1,6 +1,9 @@
+
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 import tempfile
+from typing import Iterator
 
 from minio import Minio
 
@@ -15,16 +18,11 @@ class StorageService:
             secret_key=settings.MINIO_SECRET_KEY,
             secure=settings.MINIO_SECURE,
         )
-
         self.bucket = settings.MINIO_BUCKET
 
     def ensure_bucket(self) -> None:
-        if not self.client.bucket_exists(
-            self.bucket
-        ):
-            self.client.make_bucket(
-                self.bucket
-            )
+        if not self.client.bucket_exists(self.bucket):
+            self.client.make_bucket(self.bucket)
 
     def upload_bytes(
         self,
@@ -51,16 +49,11 @@ class StorageService:
     ) -> Path:
         self.ensure_bucket()
 
-        temp_file = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=suffix,
-        )
-
-        temp_path = Path(
-            temp_file.name
-        )
-
-        temp_file.close()
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
 
         try:
             self.client.fget_object(
@@ -69,12 +62,52 @@ class StorageService:
                 file_path=str(temp_path),
             )
         except Exception:
-            if temp_path.exists():
-                temp_path.unlink()
-
+            temp_path.unlink(missing_ok=True)
             raise
 
         return temp_path
+
+    @contextmanager
+    def open_document(
+        self,
+        file_path: str,
+        file_format: str = "",
+    ) -> Iterator[Path]:
+        """
+        Provide a local path for a document.
+
+        Local files are used directly.
+        MinIO objects are downloaded temporarily.
+
+        Temporary files are removed automatically.
+        """
+        local_path = Path(file_path)
+
+        if local_path.is_file():
+            yield local_path
+            return
+
+        # MinIO object keys created by the upload endpoint.
+        if not file_path.startswith("originals/"):
+            raise FileNotFoundError(
+                f"Local document not found: {file_path}"
+            )
+
+        suffix = (
+            f".{file_format.lstrip('.')}"
+            if file_format
+            else ""
+        )
+
+        temp_path = self.download_to_temp(
+            object_name=file_path,
+            suffix=suffix,
+        )
+
+        try:
+            yield temp_path
+        finally:
+            temp_path.unlink(missing_ok=True)
 
 
 storage_service = StorageService()
