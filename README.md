@@ -399,3 +399,18 @@ PostgreSQL используется для операционных данных
 Проведены проверки синтаксиса Python, импортов модулей, структуры миграций Alembic и конфигурации dbt.
 
 Сквозное тестирование обновлённой очереди после рефакторинга не проводилось.
+
+
+## ???????? Airflow
+
+![Airflow DAG](docs/images/airflow.png)
+
+
+## ????????????? ???????
+
+![Analytics Dashboard](docs/images/dashboard.png)
+
+
+## ???-?????????
+
+![Web Interface](docs/images/web-ui.png)
