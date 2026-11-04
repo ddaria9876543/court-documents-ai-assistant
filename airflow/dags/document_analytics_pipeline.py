@@ -1,3 +1,4 @@
+
 import os
 from datetime import datetime, timedelta
 
@@ -32,8 +33,8 @@ default_args = {
 with DAG(
     dag_id="document_analytics_pipeline",
     description=(
-        "DQ checks, dbt transformations "
-        "and ClickHouse mart synchronization"
+        "Data Quality checks and dbt transformations "
+        "for PostgreSQL analytical marts"
     ),
     default_args=default_args,
     start_date=datetime(2026, 10, 1),
@@ -44,7 +45,7 @@ with DAG(
         "court-documents",
         "data-quality",
         "dbt",
-        "clickhouse",
+        "postgresql",
     ],
 ) as dag:
 
@@ -64,26 +65,4 @@ with DAG(
         ),
     )
 
-    sync_clickhouse = BashOperator(
-        task_id="sync_clickhouse",
-        bash_command=(
-            f"cd {PROJECT_ROOT} "
-            "&& /opt/dq-venv/bin/python "
-            "clickhouse/sync_marts.py"
-        ),
-        env={
-            "CLICKHOUSE_URL": (
-                "http://host.docker.internal:8123"
-            ),
-            "CLICKHOUSE_USER": "analytics",
-            "CLICKHOUSE_PASSWORD": "analytics_dev",
-            "POSTGRES_HOST": (
-                "host.docker.internal:55432"
-            ),
-            "POSTGRES_DB": "court_docs",
-            "POSTGRES_USER": "postgres",
-            "POSTGRES_PASSWORD": "postgres",
-        },
-    )
-
-    run_python_dq >> dbt_build >> sync_clickhouse
+    run_python_dq >> dbt_build

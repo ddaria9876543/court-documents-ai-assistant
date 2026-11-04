@@ -79,7 +79,7 @@ from app.services.document_service import (
 )
 
 from app.services.storage_service import storage_service
-from app.services.kafka_service import kafka_producer
+from app.models.processing_job import ProcessingJob
 
 from app.services.file_service import (
 
@@ -726,6 +726,7 @@ async def upload_documents(
                 file_size=len(content),
 
                 file_hash=file_hash,
+                auto_commit=False,
 
             )
 
@@ -733,76 +734,27 @@ async def upload_documents(
 
             document.status = "processing"
 
+            # Create a durable PostgreSQL queue job.
+            job = ProcessingJob(
+                document_id=document.id,
+                payload={
+                    "document_id": document.id,
+                    "object_name": object_name,
+                    "original_filename": file.filename or "",
+                    "file_format": extension.lstrip("."),
+                },
+                status="pending",
+                attempts=0,
+                max_attempts=3,
+            )
 
+            db.add(job)
 
+            # Save document and job atomically.
             db.commit()
-
             db.refresh(document)
 
-
-            # --------------------------------------------------
-            # 7. Отправляем документ в очередь обработки
-            #
-            # Сам OCR / LLM здесь больше не запускается.
-            # HTTP endpoint только сохраняет исходный документ
-            # и ставит задачу в Kafka.
-            # --------------------------------------------------
-
-            try:
-                kafka_producer.publish_document_processing(
-                    document_id=document.id,
-                    object_name=object_name,
-                    original_filename=(
-                        file.filename or ""
-                    ),
-                    file_format=(
-                        extension.lstrip(".")
-                    ),
-                )
-
-            except Exception as kafka_exc:
-                try:
-                    document.status = "error"
-
-                    history = DocumentHistory(
-                        document_id=document.id,
-                        event_type="queue_error",
-                        message=(
-                            "Failed to publish document "
-                            "processing event: "
-                            f"{kafka_exc}"
-                        ),
-                    )
-
-                    db.add(history)
-                    db.commit()
-                    db.refresh(document)
-
-                except Exception:
-                    db.rollback()
-
-                errors.append(
-                    UploadErrorResponse(
-                        filename=(
-                            file.filename or ""
-                        ),
-                        error=(
-                            "Queue error: "
-                            f"{kafka_exc}"
-                        ),
-                    )
-                )
-
-                continue
-
-
-            # --------------------------------------------------
-
-            # 8. Успешно обработанный файл
-
-            # --------------------------------------------------
-
-
+            # The OCR/LLM worker processes this job separately.
 
             uploaded.append(
 
