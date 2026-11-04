@@ -12,6 +12,7 @@ from app.models import (
     DocumentHistory,
     ProcessingEvent,
     StgDocumentExtraction,
+    ProcessingJob,
 )
 
 # this is the Alembic Config object, which provides

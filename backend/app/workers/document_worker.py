@@ -1,142 +1,98 @@
-import json
+
 import sys
 import time
+import threading
+from datetime import timedelta
 from pathlib import Path
 
-from confluent_kafka import Consumer
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.document import Document
 from app.models.document_history import DocumentHistory
-from app.services.document_service import (
-    apply_processing_result,
-)
-from app.services.kafka_service import (
-    kafka_producer,
-)
-from app.services.storage_service import (
-    storage_service,
-)
+from app.models.processing_job import ProcessingJob
+from app.services.document_service import apply_processing_result
+from app.services.storage_service import storage_service
 
 
 # --------------------------------------------------
-# Existing document processing pipeline
+# Existing OCR / XML / LLM pipeline
 # --------------------------------------------------
 
-PROJECT_ROOT = Path(
-    __file__
-).resolve().parents[3]
-
-DOCUMENT_PROCESSING_SRC = (
-    PROJECT_ROOT
-    / "document_processing"
-    / "src"
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DOCUMENT_PROCESSING_SRC = PROJECT_ROOT / "document_processing" / "src"
 
 if str(DOCUMENT_PROCESSING_SRC) not in sys.path:
-    sys.path.append(
-        str(DOCUMENT_PROCESSING_SRC)
-    )
+    sys.path.append(str(DOCUMENT_PROCESSING_SRC))
 
 from api_adapter import build_api_result
 
 
 # --------------------------------------------------
-# Worker settings
+# Worker configuration
 # --------------------------------------------------
 
-MAX_ATTEMPTS = 3
+POLL_INTERVAL_SECONDS = 2
+HEARTBEAT_INTERVAL_SECONDS = 20
+STALE_AFTER = timedelta(minutes=30)
 
 
 # --------------------------------------------------
-# Kafka consumer
+# Document processing
 # --------------------------------------------------
 
-consumer = Consumer(
-    {
-        "bootstrap.servers": (
-            settings.KAFKA_BOOTSTRAP_SERVERS
-        ),
-        "group.id": (
-            "court-documents-processing-worker"
-        ),
-        "auto.offset.reset": "latest",
-        "enable.auto.commit": False,
-    }
-)
+def process_message(payload: dict) -> None:
+    """Run MinIO -> OCR/XML/LLM -> PostgreSQL pipeline."""
 
-
-def process_message(
-    payload: dict,
-) -> None:
-    document_id = payload[
-        "document_id"
-    ]
-
-    object_name = payload[
-        "object_name"
-    ]
-
-    file_format = payload.get(
-        "file_format",
-        "",
-    )
+    document_id = int(payload["document_id"])
+    object_name = payload["object_name"]
+    file_format = payload.get("file_format", "")
 
     db = SessionLocal()
     temp_path = None
 
     try:
-        document = db.get(
-            Document,
-            document_id,
-        )
+        document = db.get(Document, document_id)
 
         if document is None:
             raise RuntimeError(
                 f"Document {document_id} not found"
             )
 
-        suffix = (
-            f".{file_format}"
-            if file_format
-            else ""
+        suffix = f".{file_format}" if file_format else ""
+
+        print(
+            f"[worker] document_id={document_id}: "
+            "downloading from MinIO",
+            flush=True,
+        )
+
+        temp_path = storage_service.download_to_temp(
+            object_name=object_name,
+            suffix=suffix,
         )
 
         print(
             f"[worker] document_id={document_id}: "
-            "downloading from MinIO"
+            "starting OCR/LLM",
+            flush=True,
         )
 
-        temp_path = (
-            storage_service.download_to_temp(
-                object_name=object_name,
-                suffix=suffix,
-            )
+        result = build_api_result(temp_path)
+
+        document = apply_processing_result(
+            db=db,
+            document=document,
+            result=result,
         )
 
-        print(
-            f"[worker] document_id={document_id}: "
-            "starting OCR/LLM processing"
-        )
-
-        processing_result = (
-            build_api_result(
-                temp_path
-            )
-        )
-
-        document = (
-            apply_processing_result(
-                db=db,
-                document=document,
-                result=processing_result,
-            )
-        )
+        db.commit()
 
         print(
             f"[worker] document_id={document_id}: "
-            f"finished with status={document.status}"
+            f"finished; status={document.status}",
+            flush=True,
         )
 
     except Exception:
@@ -146,45 +102,67 @@ def process_message(
     finally:
         db.close()
 
-        if (
-            temp_path
-            and temp_path.exists()
-        ):
+        if temp_path is not None:
             try:
-                temp_path.unlink()
+                Path(temp_path).unlink(missing_ok=True)
             except OSError:
                 pass
 
 
-def mark_document_error(
-    document_id: int,
-    error: str,
-) -> None:
+# --------------------------------------------------
+# Claim job from PostgreSQL
+# --------------------------------------------------
+
+def claim_job() -> tuple[int, dict, int] | None:
+    """Atomically claim one available job."""
+
     db = SessionLocal()
 
     try:
-        document = db.get(
-            Document,
-            document_id,
-        )
+        stale_before = func.now() - STALE_AFTER
 
-        if document is None:
-            return
-
-        document.status = "error"
-
-        history = DocumentHistory(
-            document_id=document_id,
-            event_type="processing_error",
-            message=(
-                "Document moved to DLQ after "
-                f"{MAX_ATTEMPTS} attempts: "
-                f"{error}"
+        eligible = or_(
+            and_(
+                ProcessingJob.status == "pending",
+                ProcessingJob.available_at <= func.now(),
+            ),
+            and_(
+                ProcessingJob.status == "processing",
+                ProcessingJob.locked_at < stale_before,
             ),
         )
 
-        db.add(history)
+        job = db.scalar(
+            select(ProcessingJob)
+            .where(
+                eligible,
+                ProcessingJob.attempts < ProcessingJob.max_attempts,
+            )
+            .order_by(
+                ProcessingJob.available_at,
+                ProcessingJob.id,
+            )
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+
+        if job is None:
+            db.rollback()
+            return None
+
+        job.status = "processing"
+        job.attempts += 1
+        job.locked_at = func.now()
+        job.last_error = None
+        job.updated_at = func.now()
+
+        job_id = job.id
+        payload = dict(job.payload)
+        attempt = job.attempts
+
         db.commit()
+
+        return job_id, payload, attempt
 
     except Exception:
         db.rollback()
@@ -194,152 +172,350 @@ def mark_document_error(
         db.close()
 
 
-def handle_processing_error(
-    payload: dict,
+# --------------------------------------------------
+# Heartbeat
+# --------------------------------------------------
+
+def heartbeat_loop(
+    job_id: int,
+    attempt: int,
+    stop_event: threading.Event,
+) -> None:
+    """Keep the job lease alive during long OCR/LLM processing."""
+
+    while not stop_event.wait(HEARTBEAT_INTERVAL_SECONDS):
+        db = SessionLocal()
+
+        try:
+            job = db.get(ProcessingJob, job_id)
+
+            if (
+                job is None
+                or job.status != "processing"
+                or job.attempts != attempt
+            ):
+                return
+
+            job.locked_at = func.now()
+            job.updated_at = func.now()
+            db.commit()
+
+        except Exception as exc:
+            db.rollback()
+            print(
+                f"[worker] heartbeat error for job={job_id}: {exc}",
+                flush=True,
+            )
+
+        finally:
+            db.close()
+
+
+# --------------------------------------------------
+# Complete successful job
+# --------------------------------------------------
+
+def complete_job(
+    job_id: int,
+    attempt: int,
+) -> None:
+    db = SessionLocal()
+
+    try:
+        job = db.scalar(
+            select(ProcessingJob)
+            .where(ProcessingJob.id == job_id)
+            .with_for_update()
+        )
+
+        if (
+            job is None
+            or job.status != "processing"
+            or job.attempts != attempt
+        ):
+            raise RuntimeError(
+                f"Job {job_id} is no longer owned by "
+                f"attempt {attempt}"
+            )
+
+        job.status = "completed"
+        job.locked_at = None
+        job.updated_at = func.now()
+        job.last_error = None
+
+        db.commit()
+
+        print(
+            f"[worker] job={job_id}: completed",
+            flush=True,
+        )
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+
+# --------------------------------------------------
+# Retry / failed job
+# --------------------------------------------------
+
+def fail_job(
+    job_id: int,
+    attempt: int,
     error: Exception,
 ) -> None:
-    retry_count = int(
-        payload.get(
-            "retry_count",
-            0,
-        )
-    )
 
-    attempt_number = (
-        retry_count + 1
-    )
+    db = SessionLocal()
 
-    document_id = payload.get(
-        "document_id"
-    )
-
-    print(
-        f"[worker] document_id={document_id}: "
-        f"attempt {attempt_number}/"
-        f"{MAX_ATTEMPTS} failed: {error}"
-    )
-
-    if attempt_number < MAX_ATTEMPTS:
-        # Небольшая задержка перед повторной попыткой.
-        delay_seconds = (
-            attempt_number * 2
+    try:
+        job = db.scalar(
+            select(ProcessingJob)
+            .where(ProcessingJob.id == job_id)
+            .with_for_update()
         )
 
-        print(
-            f"[worker] retry in "
-            f"{delay_seconds}s"
-        )
+        if (
+            job is None
+            or job.status != "processing"
+            or job.attempts != attempt
+        ):
+            print(
+                f"[worker] job={job_id}: ownership changed, "
+                "skipping error update",
+                flush=True,
+            )
+            db.rollback()
+            return
 
-        time.sleep(
-            delay_seconds
-        )
+        error_message = str(error)[:4000]
+        job.last_error = error_message
+        job.locked_at = None
+        job.updated_at = func.now()
 
-        kafka_producer.publish_retry(
-            payload
-        )
+        if job.attempts < job.max_attempts:
 
-        print(
-            f"[worker] document_id={document_id}: "
-            "retry published"
-        )
+            delay_seconds = job.attempts * 2
 
-        return
+            job.status = "pending"
+            job.available_at = (
+                func.now() + timedelta(seconds=delay_seconds)
+            )
 
-    kafka_producer.publish_dlq(
-        payload=payload,
-        error=str(error),
-    )
+            db.add(
+                DocumentHistory(
+                    document_id=job.document_id,
+                    event_type="processing_retry",
+                    message=(
+                        f"Attempt {job.attempts}/"
+                        f"{job.max_attempts} failed: "
+                        f"{error_message}"
+                    ),
+                )
+            )
 
-    if document_id is not None:
-        mark_document_error(
-            document_id=int(document_id),
-            error=str(error),
-        )
+            db.commit()
 
-    print(
-        f"[worker] document_id={document_id}: "
-        "moved to DLQ"
-    )
+            print(
+                f"[worker] job={job_id}: retry in "
+                f"{delay_seconds}s",
+                flush=True,
+            )
 
+        else:
+            job.status = "failed"
+
+            document = db.get(Document, job.document_id)
+
+            if document is not None:
+                document.status = "error"
+
+            db.add(
+                DocumentHistory(
+                    document_id=job.document_id,
+                    event_type="processing_error",
+                    message=(
+                        f"Processing failed after "
+                        f"{job.attempts} attempts: "
+                        f"{error_message}"
+                    ),
+                )
+            )
+
+            db.commit()
+
+            print(
+                f"[worker] job={job_id}: permanently failed",
+                flush=True,
+            )
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+
+# --------------------------------------------------
+# Recover expired jobs without remaining attempts
+# --------------------------------------------------
+
+def recover_exhausted_jobs() -> None:
+    """Mark abandoned jobs with exhausted attempts as failed."""
+
+    db = SessionLocal()
+
+    try:
+        stale_before = func.now() - STALE_AFTER
+
+        jobs = db.scalars(
+            select(ProcessingJob)
+            .where(
+                ProcessingJob.status == "processing",
+                ProcessingJob.locked_at < stale_before,
+                ProcessingJob.attempts >= ProcessingJob.max_attempts,
+            )
+            .limit(20)
+            .with_for_update(skip_locked=True)
+        ).all()
+
+        for job in jobs:
+            job.status = "failed"
+            job.locked_at = None
+            job.last_error = (
+                job.last_error
+                or "Worker stopped or lost heartbeat"
+            )
+            job.updated_at = func.now()
+
+            document = db.get(Document, job.document_id)
+
+            if document is not None:
+                document.status = "error"
+
+            db.add(
+                DocumentHistory(
+                    document_id=job.document_id,
+                    event_type="processing_error",
+                    message=(
+                        "Processing stopped after maximum "
+                        "attempts; worker lease expired"
+                    ),
+                )
+            )
+
+        db.commit()
+
+        if jobs:
+            print(
+                f"[worker] recovered {len(jobs)} "
+                "exhausted jobs",
+                flush=True,
+            )
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+
+# --------------------------------------------------
+# Worker main loop
+# --------------------------------------------------
 
 def main() -> None:
-    consumer.subscribe(
-        [
-            settings.KAFKA_DOCUMENT_TOPIC
-        ]
+
+    print(
+        "[worker] PostgreSQL processing worker started",
+        flush=True,
     )
 
     print(
-        "[worker] Waiting for "
-        f"{settings.KAFKA_DOCUMENT_TOPIC}..."
+        f"[worker] polling interval: "
+        f"{POLL_INTERVAL_SECONDS}s",
+        flush=True,
     )
+
+    last_recovery = 0.0
 
     try:
         while True:
-            message = consumer.poll(
-                1.0
-            )
-
-            if message is None:
-                continue
-
-            if message.error():
-                print(
-                    "[worker] Kafka error: "
-                    f"{message.error()}"
-                )
-                continue
 
             try:
-                payload = json.loads(
-                    message.value().decode(
-                        "utf-8"
-                    )
-                )
+                now = time.monotonic()
 
-                print(
-                    "[worker] Received: "
-                    f"{payload}"
-                )
+                if now - last_recovery >= 30:
+                    recover_exhausted_jobs()
+                    last_recovery = now
 
-                process_message(
-                    payload
-                )
+                claimed = claim_job()
 
-            except Exception as exc:
-                try:
-                    handle_processing_error(
-                        payload=payload,
-                        error=exc,
-                    )
-
-                except Exception as retry_exc:
-                    print(
-                        "[worker] Retry/DLQ "
-                        "handling failed: "
-                        f"{retry_exc}"
-                    )
-
-                    # Если даже retry/DLQ не удалось
-                    # записать, offset НЕ коммитим.
+                if claimed is None:
+                    time.sleep(POLL_INTERVAL_SECONDS)
                     continue
 
-            # Коммитим исходное сообщение:
-            # - после успешной обработки;
-            # - после успешной публикации retry;
-            # - после успешной публикации в DLQ.
-            consumer.commit(
-                message=message,
-                asynchronous=False,
-            )
+                job_id, payload, attempt = claimed
+
+                print(
+                    f"[worker] claimed job={job_id}, "
+                    f"attempt={attempt}",
+                    flush=True,
+                )
+
+                stop_event = threading.Event()
+
+                heartbeat_thread = threading.Thread(
+                    target=heartbeat_loop,
+                    args=(job_id, attempt, stop_event),
+                    daemon=True,
+                )
+
+                heartbeat_thread.start()
+
+                processing_error = None
+
+                try:
+                    process_message(payload)
+
+                except Exception as exc:
+                    processing_error = exc
+
+                finally:
+                    stop_event.set()
+                    heartbeat_thread.join()
+
+                if processing_error is None:
+                    complete_job(job_id, attempt)
+                else:
+                    print(
+                        f"[worker] job={job_id}: "
+                        f"{processing_error}",
+                        flush=True,
+                    )
+
+                    fail_job(
+                        job_id=job_id,
+                        attempt=attempt,
+                        error=processing_error,
+                    )
+
+            except Exception as exc:
+                print(
+                    f"[worker] loop error: {exc}",
+                    flush=True,
+                )
+                time.sleep(POLL_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
         print(
-            "\n[worker] Stopping..."
+            "\n[worker] stopping...",
+            flush=True,
         )
-
-    finally:
-        consumer.close()
 
 
 if __name__ == "__main__":

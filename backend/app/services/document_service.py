@@ -128,6 +128,7 @@ def find_duplicate(
     )
 
 
+
 def create_document(
     db: Session,
     filename: str,
@@ -136,6 +137,7 @@ def create_document(
     file_format: str,
     file_size: int,
     file_hash: str,
+    auto_commit: bool = True,
 ) -> Document:
 
     document = Document(
@@ -165,7 +167,6 @@ def create_document(
         event_type="document_created",
         message="Document created",
     )
-
     db.add(history)
 
     file_history = DocumentHistory(
@@ -173,13 +174,14 @@ def create_document(
         event_type="file_uploaded",
         message=f"File uploaded: {original_filename}",
     )
-
     db.add(file_history)
 
-    db.commit()
-    db.refresh(document)
+    if auto_commit:
+        db.commit()
+        db.refresh(document)
 
     return document
+
 
 
 def to_float_or_none(value):
